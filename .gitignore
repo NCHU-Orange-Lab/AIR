@@ -1,0 +1,4 @@
+# Python 執行時產生的快取
+__pycache__/
+*.py[cod]
+.pytest_cache/
