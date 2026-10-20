@@ -1,0 +1,136 @@
+# AIR 規範設定（套件預設值）
+#
+# 這個檔案屬於 AIR 套件，更新 AIR 時會被整包換掉，請不要在專案裡修改它。
+# 專案專屬的設定（套件位置、額外允許的模組、遷移狀態）寫在專案根目錄的 .air/project.toml。
+# 每則訊息開頭的編號，對應各層 CLAUDE.md（來源：AIR/rules/）中的規則。
+
+[soft]
+# 只提醒、不擋（AIR101、AIR102）
+max-statements = 40
+max-complexity = 10
+
+[imports]
+# 純的層（pure = true）可以 import 的外部模組（含子模組）。預設禁止，沒列出的一律擋下（AIR002）。
+common = [
+  "__future__", "typing", "collections", "dataclasses", "enum", "abc",
+  "itertools", "functools", "operator", "copy",
+  "math", "statistics", "decimal", "fractions",
+  "re", "string", "json", "datetime",
+  "pandas", "numpy",
+]
+
+# ── 分層 ──
+# 每一層都是套件底下的子套件（例如 src/shop/steps/）。
+# internal：這一層可以 import 的層（可以指定到模組，例如 contracts.types）。依賴方向（AIR007）每次編輯都會檢查。
+# pure：純的層會檢查外部 import 白名單、I/O、時間、亂數。
+
+[layers.contracts]
+pure = true
+internal = ["contracts"]
+rule = "CTR-1"
+
+[layers.steps]
+pure = true
+internal = ["steps", "contracts.types"]
+rule = "STEP-1"
+
+[layers.flows]
+pure = true
+internal = ["steps", "flows", "contracts"]
+rule = "FLOW-1"
+check-cycles = true
+cycle-rule = "FLOW-5"
+
+[layers.adapters]
+pure = false
+internal = ["contracts"]
+rule = "ADP-6"
+
+[layers.storage]
+pure = false
+internal = ["contracts"]
+rule = "IO-4"
+
+[layers.main]
+pure = false
+internal = ["contracts", "steps", "flows", "adapters", "storage", "main"]
+rule = "MAIN-1"
+
+# ── 被擋下時的修法提示 ──
+# 一般鍵名：外部模組（純的層 import 時被擋）。「layer:」開頭：跨層 import 被擋時，依目標的層或模組顯示。
+[hints]
+os = "不能使用 os（檔案操作、環境變數）。移到 storage，結果用參數傳進來。"
+io = "不能使用標準庫 io（檔案、串流）。移到 storage。"
+pathlib = "不能操作檔案路徑或讀寫檔案。移到 storage。"
+shutil = "不能操作檔案。移到 storage。"
+sys = "不能使用 sys（命令列參數、標準輸出入、行程）。移到 main。"
+subprocess = "不能執行外部指令。包成 adapter（見 skill air-wrap-tool）。"
+random = "不能直接取亂數。由參數傳入 seed，用 np.random.default_rng(seed)。"
+time = "不能直接讀時間。由參數傳入。"
+logging = "不寫 log。需要記錄的資訊放進回傳值，由外層處理。"
+pprint = "不能 print。需要的資訊放進回傳值。"
+requests = "不能呼叫網路。包成 adapter（見 skill air-wrap-tool）。"
+httpx = "不能呼叫網路。包成 adapter（見 skill air-wrap-tool）。"
+"layer:contracts.ports" = "steps 不接收 Protocol：在 flow 裡呼叫注入的工具，把結果（資料）傳給 step。"
+"layer:storage" = "資料由 main 透過 storage 讀取後，用參數傳進來。"
+"layer:adapters" = "改用 contracts/ports.py 的 Protocol，由 main 注入。"
+"layer:flows" = "依賴方向是 flows → steps → contracts；共用的邏輯放在 steps。"
+"layer:steps" = "steps 只給 flows 與 main 使用；adapters、storage、contracts 不能呼叫它。"
+"layer:main" = "main 是最外層，只有它能呼叫其他層。"
+
+# ── 純的層禁用的呼叫 ──
+
+[banned-builtins]
+open = "STEP-2/FLOW-2：不能直接讀寫檔案。讀寫移到 storage，結果用參數傳進來。"
+print = "STEP-2/FLOW-2：不能 print。需要的資訊放進回傳值。"
+input = "STEP-2/FLOW-2：不能讀取使用者輸入。由參數傳入。"
+eval = "STEP-2：不能使用 eval。"
+exec = "STEP-2：不能使用 exec。"
+breakpoint = "STEP-2：不能留下 breakpoint()。"
+__import__ = "STEP-1：不能動態 import。"
+
+# 不論物件型別，只要呼叫這些名稱的方法就擋（不做型別推論，改用名稱比對）
+[banned-methods]
+msg = "STEP-2/FLOW-2：不能讀寫檔案或資料庫（不論物件型別）。讀寫移到 storage；只需要字串時，在 storage 或 main 轉換。"
+names = [
+  "to_csv", "to_parquet", "to_excel", "to_pickle", "to_json", "to_sql",
+  "to_feather", "to_hdf", "to_stata", "tofile",
+  "read_text", "read_bytes", "write_text", "write_bytes",
+]
+
+# 呼叫時必須提供的參數：關鍵字或位置參數其中之一（有 *args、**kwargs 時視為已提供）
+[required-args]
+sample = { keyword = "random_state", position = 4, msg = "STEP-3：df.sample() 必須傳入 random_state（由參數傳入的 seed）。" }
+default_rng = { keyword = "seed", position = 0, msg = "STEP-3：default_rng() 必須傳入 seed（由參數傳入），否則每次結果不同。" }
+
+# 白名單模組中禁用的函式（以完整名稱比對，會解析 import 別名，例如 pd.read_csv → pandas.read_csv）
+[banned-calls]
+"pandas.read_csv" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"pandas.read_excel" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"pandas.read_parquet" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"pandas.read_json" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"pandas.read_pickle" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"pandas.read_sql" = "STEP-2/FLOW-2：不能讀資料庫。改由 storage 讀取後用參數傳入。"
+"numpy.load" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"numpy.loadtxt" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"numpy.genfromtxt" = "STEP-2/FLOW-2：不能讀檔。改由 storage 讀取後用參數傳入。"
+"numpy.save" = "STEP-2/FLOW-2：不能寫檔。改由 storage 寫入。"
+"numpy.savez" = "STEP-2/FLOW-2：不能寫檔。改由 storage 寫入。"
+"numpy.savetxt" = "STEP-2/FLOW-2：不能寫檔。改由 storage 寫入。"
+"numpy.random.seed" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.rand" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.randn" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.randint" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.random" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.choice" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.shuffle" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.permutation" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.normal" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"numpy.random.uniform" = "STEP-3：不能用全域亂數狀態。由參數傳入 seed，用 np.random.default_rng(seed)。"
+"datetime.datetime.now" = "STEP-3：不能直接讀時間。由參數傳入。"
+"datetime.datetime.today" = "STEP-3：不能直接讀時間。由參數傳入。"
+"datetime.datetime.utcnow" = "STEP-3：不能直接讀時間。由參數傳入。"
+"datetime.date.today" = "STEP-3：不能直接讀時間。由參數傳入。"
+"pandas.Timestamp.now" = "STEP-3：不能直接讀時間。由參數傳入。"
+"pandas.Timestamp.today" = "STEP-3：不能直接讀時間。由參數傳入。"
+"pandas.Timestamp.utcnow" = "STEP-3：不能直接讀時間。由參數傳入。"

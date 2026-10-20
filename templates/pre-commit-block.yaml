@@ -1,0 +1,9 @@
+# 專案已經使用 pre-commit、但安裝程式無法自動加入時，把下面這段加到 repos: 底下
+  - repo: local
+    hooks:
+      - id: air-check
+        name: AIR 規範檢查
+        entry: sh AIR/hooks/commit_check.sh
+        language: system
+        pass_filenames: false
+        always_run: true

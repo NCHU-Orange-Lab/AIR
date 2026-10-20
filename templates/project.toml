@@ -1,0 +1,24 @@
+# AIR 專案設定
+#
+# 這個檔案屬於這個專案，更新 AIR 時不會被覆蓋。
+# 規則本身的預設值在 AIR/config.toml（屬於套件，不要在專案裡修改）。
+
+[project]
+package = "{package}"           # 套件的 import 名稱
+package-dir = "{package_dir}"   # 套件目錄（相對專案根目錄）；各層是它底下的子套件
+tests-dir = "tests"             # 測試目錄（會放入 TEST 規則）
+test-command = ""               # 專案的測試指令，分析階段由 AI 確認後填入，例如 "pytest -q"
+
+[imports]
+# 純的層額外允許 import 的外部模組。新增前要經使用者同意。
+extra = []
+
+[migration]
+# 遷移階段：installed → analyzed → planned → layered → migrating → done
+phase = "installed"
+
+# 遷移期間，暫時允許某一層 import 尚未遷移的舊模組。每一項都要寫原因，並經使用者同意；
+# 遷移完成（phase = "done"）之前必須清空。
+allow-legacy = [
+  # { from = "steps", module = "shop.utils", reason = "第 2 批才搬，暫時共用 parse_amount" },
+]
