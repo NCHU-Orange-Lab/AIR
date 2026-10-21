@@ -25,6 +25,13 @@ GENERIC_EXTERNAL = (
 )
 
 
+def rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
 @dataclass(frozen=True)
 class Violation:
     path: Path
@@ -34,17 +41,60 @@ class Violation:
     msg: str
 
     def format(self, root: Path) -> str:
-        try:
-            shown = self.path.relative_to(root)
-        except ValueError:
-            shown = self.path
-        return f"{shown}:{self.line}:{self.col}: {self.code} {self.msg}"
+        return f"{rel(self.path, root)}:{self.line}:{self.col}: {self.code} {self.msg}"
+
+    def to_dict(self, root: Path) -> dict:
+        return {"path": rel(self.path, root), "line": self.line, "col": self.col, "code": self.code, "msg": self.msg}
+
+
+# 指定了檔案但沒檢查的原因
+MISSING, NOT_PY, OUTSIDE = "找不到檔案", "不是 .py", "不在任何層內"
+# verdict → CLI 結束碼
+EXIT = {"pass": 0, "not_applicable": 0, "violation": 1, "input_error": 2}
 
 
 @dataclass
 class Report:
     hard: list[Violation] = field(default_factory=list)
     soft: list[Violation] = field(default_factory=list)
+    checked: list[Path] = field(default_factory=list)  # 實際檢查過的檔案
+    skipped: list[tuple[Path, str]] = field(default_factory=list)  # 指定了但沒檢查的檔案與原因
+    legacy: list[Path] = field(default_factory=list)  # 全專案檢查時，層外的 .py（不檢查，只讓範圍看得見）
+
+    @property
+    def verdict(self) -> str:
+        """pass｜violation｜not_applicable（沒有檢查任何檔案）｜input_error（指定的檔案不存在）。
+
+        「沒有違規」和「有檢查過」是兩件事：空層的 pass 是 not_applicable，不能當成合規的證據。
+        """
+        if any(why == MISSING for _, why in self.skipped):
+            return "input_error"
+        if self.hard:
+            return "violation"
+        return "pass" if self.checked else "not_applicable"
+
+    def summary(self, root: Path) -> str:
+        n = len(self.checked)
+        if self.verdict == "input_error":
+            missing = "、".join(rel(p, root) for p, why in self.skipped if why == MISSING)
+            return f"錯誤：找不到檔案 {missing}"
+        if self.verdict == "violation":
+            return f"AIR 檢查未通過：{len(self.hard)} 個違規（檢查了 {n} 個檔案）"
+        if self.verdict == "not_applicable":
+            return "AIR 檢查：沒有檢查任何檔案（各層還是空的，或指定的檔案都不在層內）。這不代表合規。"
+        legacy = f"；舊程式碼 {len(self.legacy)} 個模組不檢查" if self.legacy else ""
+        return f"AIR 檢查通過（{n} 個檔案{legacy}）"
+
+    def to_dict(self, root: Path) -> dict:
+        return {
+            "schema": "air.check.v1",
+            "verdict": self.verdict,
+            "checked": [rel(p, root) for p in self.checked],
+            "skipped": [{"path": rel(p, root), "reason": why} for p, why in self.skipped],
+            "legacy": [rel(p, root) for p in self.legacy],
+            "hard": [v.to_dict(root) for v in self.hard],
+            "soft": [v.to_dict(root) for v in self.soft],
+        }
 
 
 def read_source(path: Path) -> str | Violation:
@@ -236,16 +286,26 @@ def cycle_violations(layer: Layer, cfg: Config, touched: set[Path] | None) -> li
 # ── 整體 ──
 
 def check(cfg: Config, paths: list[Path] | None = None) -> Report:
-    """paths 為 None 時檢查所有層；否則只檢查給定檔案中位於層內的 .py。"""
+    """paths 為 None 時檢查所有層；否則只檢查給定檔案中位於層內的 .py。沒檢查的檔案與原因記在 report.skipped。"""
+    report, touched = Report(), {}
     if paths is None:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
+        if cfg.package_dir.is_dir():
+            report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None]
     else:
-        targets = [p for p in paths if p.suffix == ".py" and p.exists()]
-    report, touched = Report(), {}
+        targets = []
+        for p in paths:
+            if p.suffix != ".py":
+                report.skipped.append((p, NOT_PY))
+            elif not p.exists():
+                report.skipped.append((p, MISSING))
+            else:
+                targets.append(p)
     for f in targets:
         layer = layer_of(f, cfg)
         mod = module_of(f, cfg) if layer else None
         if not mod:
+            report.skipped.append((f, OUTSIDE))
             continue
         source = read_source(f)
         if isinstance(source, Violation):
@@ -254,6 +314,7 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
             r = check_source(source, mod[0], mod[1], layer, cfg, f)
             report.hard += r.hard
             report.soft += r.soft
+        report.checked.append(f)
         touched.setdefault(layer.name, set()).add(f.resolve())
     for layer in cfg.layers.values():
         if layer.check_cycles and layer.name in touched:

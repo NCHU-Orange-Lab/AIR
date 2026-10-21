@@ -1,13 +1,18 @@
 """AIR 規範套件的指令入口。只需要 Python 3.11+。
 
-  python3 AIR/air.py check [檔案 ...]       檢查（不給檔案時檢查所有層）；違規時 exit 1
+  python3 AIR/air.py check [檔案 ...] [--json]      快速檢查（不給檔案時檢查所有層）
+  python3 AIR/air.py verify [--scope batch|final] [--json]
+                                             正式驗收：架構檢查＋測試指令；結果綁定這一版程式碼，寫進 .air/verify.json
   python3 AIR/air.py install [--package P --package-dir D]
   python3 AIR/air.py uninstall [--purge]
   python3 AIR/air.py layers [層 ...]         建立分層目錄（預設全部）
   python3 AIR/air.py survey                  盤點現有程式碼（Markdown）
-  python3 AIR/air.py status                  顯示套件、遷移階段、違規數
-  python3 AIR/air.py phase <階段>            設定遷移階段
+  python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
+  python3 AIR/air.py phase <階段> [--rollback|--force] [--reason 原因]
+                                             推進遷移階段（一次一格，會檢查前置條件；退回或強制要寫原因）
   python3 AIR/air.py hook <post-edit|pre-bash|stop>   給 hook 使用（從 stdin 讀 JSON；接受 Claude Code 與 Codex 的 payload）
+
+結束碼：0 通過；1 沒通過（違規、驗收未通過、階段轉移被拒）；2 操作錯誤（找不到檔案、沒安裝、設定錯、測試指令跑不起來）
 """
 
 from __future__ import annotations
@@ -24,8 +29,8 @@ if sys.version_info < (3, 11):
 sys.dont_write_bytecode = True  # 不在使用者專案的 AIR/ 裡產生 __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import guard, install, project  # noqa: E402
-from airkit.checks import check  # noqa: E402
+from airkit import guard, install, project, verify  # noqa: E402
+from airkit.checks import EXIT, check  # noqa: E402
 from airkit.config import ConfigError, load, project_root  # noqa: E402
 
 FIX_HINT = "依訊息中的規則編號讀對應層的 CLAUDE.md 後修正（前綴對照見 AIR/AGENTS.md）。"
@@ -44,10 +49,18 @@ def cmd_check(args) -> int:
     cfg = load()
     paths = [Path(p).resolve() for p in args.paths] or None
     report = check(cfg, paths)
-    print_report(report, cfg.root)
-    if not report.hard:
-        print("AIR 檢查通過")
-    return 1 if report.hard else 0
+    if args.json:
+        print(json.dumps(report.to_dict(cfg.root), ensure_ascii=False, indent=2))
+    else:
+        print_report(report, cfg.root)
+        print(report.summary(cfg.root))
+    return EXIT[report.verdict]
+
+
+def cmd_verify(args) -> int:
+    receipt = verify.verify(load(), args.scope)
+    print(json.dumps(receipt, ensure_ascii=False, indent=2) if args.json else verify.format_receipt(receipt))
+    return verify.exit_code(receipt)
 
 
 def cmd_install(args) -> int:
@@ -84,12 +97,19 @@ def cmd_survey(args) -> int:
 
 
 def cmd_status(args) -> int:
-    print(project.status(load()))
+    cfg = load()
+    print(json.dumps(project.status_data(cfg), ensure_ascii=False, indent=2) if args.json else project.status(cfg))
     return 0
 
 
 def cmd_phase(args) -> int:
-    project.set_phase(load(), args.phase)
+    try:
+        lines = project.transition(load(), args.phase, rollback=args.rollback, force=args.force, reason=args.reason)
+    except project.TransitionError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
+    for line in lines:
+        print(f"  {line}")
     print(f"遷移階段：{args.phase}")
     return 0
 
@@ -169,6 +189,10 @@ def main(argv: list[str]) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("check")
     p.add_argument("paths", nargs="*")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("verify")
+    p.add_argument("--scope", choices=verify.SCOPES, default="batch")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("install")
     p.add_argument("--package")
     p.add_argument("--package-dir")
@@ -177,21 +201,25 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("layers")
     p.add_argument("names", nargs="*")
     sub.add_parser("survey")
-    sub.add_parser("status")
+    p = sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("phase")
     p.add_argument("phase")
+    p.add_argument("--rollback", action="store_true", help="退回較早的階段（要加 --reason）")
+    p.add_argument("--force", action="store_true", help="略過前置條件（要加 --reason；會記錄）")
+    p.add_argument("--reason", default="")
     p = sub.add_parser("hook")
     p.add_argument("event", choices=["post-edit", "pre-bash", "stop"])
     args = parser.parse_args(argv)
     handlers = {
-        "check": cmd_check, "install": cmd_install, "uninstall": cmd_uninstall, "layers": cmd_layers,
-        "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "hook": cmd_hook,
+        "check": cmd_check, "verify": cmd_verify, "install": cmd_install, "uninstall": cmd_uninstall,
+        "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "hook": cmd_hook,
     }
     try:
         return handlers[args.cmd](args)
     except (ConfigError, install.InstallError, ValueError, OSError) as e:
         print(f"錯誤：{e}", file=sys.stderr)
-        return 1
+        return 2
 
 
 if __name__ == "__main__":

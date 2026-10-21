@@ -8,6 +8,7 @@
 - 不要在同一個 commit 裡同時「改變行為」和「搬移程式」。
 - 不要修改 `AIR/` 底下的任何檔案。
 - 判斷不確定時（某段程式該放哪一層、某個模組可不可以加進白名單），**問使用者**，不要自己決定。
+- 階段只能一次前進一格：`python3 AIR/air.py phase <階段>` 會檢查前置條件，不滿足會拒絕並列出原因。照原因處理，**不要用 `--force`**（只有使用者明確要求時才用，而且要寫 `--reason`；每次轉移都記在 `.air/history.jsonl`）。
 
 ---
 
@@ -35,7 +36,7 @@
    - 每個模組建議歸到哪一層，以及理由（依 survey 的訊號：有 I/O 的歸 storage、用第三方工具的歸 adapters、純計算的歸 steps、負責串接的歸 flows、進入點歸 main）
    - **混在一起的模組**（例如同一個函式裡又讀檔又計算）要特別標出來，這類模組需要拆開
    - 測試覆蓋不足、風險高的地方
-5. `python3 AIR/air.py phase analyzed`
+5. `python3 AIR/air.py phase analyzed`（會確認 `test-command` 已設定、遷移報告存在）
 
 **停下來**，請使用者審閱分析結果。使用者對分類有意見時，修改報告後再請他確認。
 
@@ -60,8 +61,8 @@
 ## 階段 4：建立分層
 
 1. `python3 AIR/air.py layers`：建立各層的目錄，並放入各層的 `CLAUDE.md`。
-2. `python3 AIR/air.py check`：此時各層都是空的，應該通過。
-3. `python3 AIR/air.py phase layered`，然後 commit：`AIR：建立分層`。
+2. `python3 AIR/air.py check`：此時各層只有 `__init__.py` 與 contracts 的樣板，應該通過。
+3. `python3 AIR/air.py phase layered`（會確認層目錄都存在、檢查通過），然後 commit：`AIR：建立分層`。
 
 **停下來**，等使用者核准後開始第 1 批。
 
@@ -77,7 +78,7 @@
 2. **搬移或拆分**：把程式搬進對應的層，必要時拆開（例如把讀檔和計算分開）。
    - 讓舊的 import 路徑繼續可用：在原本的舊模組裡保留轉接（`from shop.steps.orders import valid_orders`），呼叫端就不用一次全改。轉接在收尾時移除。
    - 新的層 import 了還沒搬的舊模組時，檢查會回報 AIR008。只有在這一批真的沒辦法先搬時，才**經使用者同意**加進 `migration.allow-legacy`，並寫上原因。
-3. **驗證**：專案的測試指令必須通過，`python3 AIR/air.py check` 必須通過。
+3. **驗證**：`python3 AIR/air.py verify` 必須通過。它會執行專案的測試指令與架構檢查，並把結果綁定這一版程式碼記在 `.air/verify.json`；只跑 `check` 不算驗證。
 4. 更新遷移報告的「進度」一節。
 5. commit：`AIR 遷移第 N 批：<內容>`
 
@@ -92,7 +93,7 @@
 1. 移除階段 5 留下的轉接，把呼叫端改成直接 import 新的層。
 2. 清空 `migration.allow-legacy`。
 3. 檢查剩下的舊程式碼：應該搬的都搬完了；剩下的（例如設定、腳本）在報告裡寫明為什麼留在外面。
-4. 專案的測試指令與 `python3 AIR/air.py check` 都必須通過。
-5. 在遷移報告寫下總結，然後 `python3 AIR/air.py phase done`，commit：`AIR 遷移完成`。
+4. `python3 AIR/air.py verify --scope final` 必須通過：除了測試與架構檢查，還會確認 `allow-legacy` 已清空，並列出還在層外的模組（對照第 3 步的說明）。
+5. 在遷移報告寫下總結，然後 `python3 AIR/air.py phase done`（需要第 4 步的驗收紀錄，而且之後沒有再改程式或設定；改了就重跑第 4 步），commit：`AIR 遷移完成`。
 
 **停下來**，向使用者報告遷移完成。

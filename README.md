@@ -33,10 +33,12 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 2. 分析 | 盤點所有模組、確認測試指令、寫出每個模組該歸到哪一層 | 審閱 `docs/AIR-遷移報告.md` 的分析 |
 | 3. 計畫 | 把遷移切成數個批次 | 核准計畫 |
 | 4. 建立分層 | 建立空的各層目錄與規則 | 核准 |
-| 5. 逐批遷移 | 每一批：先補行為保護測試 → 搬移 → 測試與檢查通過 → commit | 每批結束時核准下一批 |
-| 6. 收尾 | 移除過渡用的轉接，確認全部通過 | 確認完成 |
+| 5. 逐批遷移 | 每一批：先補行為保護測試 → 搬移 → `verify`（測試＋架構檢查）通過 → commit | 每批結束時核准下一批 |
+| 6. 收尾 | 移除過渡用的轉接，`verify --scope final` 通過 | 確認完成 |
 
 遷移期間，還沒搬進任何層的程式屬於「舊程式碼」，不受檢查，專案可以照常運作。
+
+階段只能一次前進一格，而且有前置條件（例如進入 `done` 需要一份剛通過、程式碼沒再改過的 `verify --scope final` 紀錄）；AI 不能直接把階段設成 `done`。每次轉移都記在 `.air/history.jsonl`。
 
 ## 安裝後專案裡會多出什麼
 
@@ -47,7 +49,9 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.claude/settings.json` | 三個 hook（編輯後、執行 Bash 前、結束前） | 是 |
 | `.claude/skills/air-*/` | 五個 skill | 是 |
 | `.air/project.toml` | 這個專案的設定：套件位置、測試指令、遷移階段 | 是 |
+| `.air/history.jsonl` | 每次階段轉移的紀錄（時間、commit、方式、原因） | 是 |
 | `.air/python` | 這台電腦的 Python 路徑 | 否 |
+| `.air/verify.json` | 最近一次 `verify` 的結果，綁定當時的程式碼 | 否 |
 | 各層與 tests 的 `CLAUDE.md` | 該層的規則 | 是 |
 | `docs/AIR-遷移報告.md` | AI 寫的分析、計畫與進度 | 是 |
 | commit 前檢查 | 有用 pre-commit 就加進 `.pre-commit-config.yaml`；沒有就裝 `.git/hooks/pre-commit` | `.git/hooks` 不進版本控制 |
@@ -64,8 +68,9 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 ## 常用指令
 
 ```sh
-python3 AIR/air.py status      # 套件、遷移階段、違規數
-python3 AIR/air.py check       # 檢查所有層
+python3 AIR/air.py status      # 套件、遷移階段、檢查範圍、違規數、最近驗收
+python3 AIR/air.py check       # 快速檢查所有層（加 --json 得到機器可讀的結果）
+python3 AIR/air.py verify      # 正式驗收：測試指令＋架構檢查，結果記在 .air/verify.json
 python3 AIR/air.py survey      # 盤點現有程式碼
 ```
 

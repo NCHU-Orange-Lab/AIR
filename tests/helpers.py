@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -24,7 +25,8 @@ PROJECT_TOML = """[project]
 package = "demo"
 package-dir = "demo"
 tests-dir = "tests"
-test-command = ""
+test-command = {test_command}
+test-timeout = {test_timeout}
 
 [imports]
 extra = [{extra}]
@@ -34,14 +36,20 @@ phase = "{phase}"
 allow-legacy = [{allow}]
 """
 
+# 給 test-command 用的指令（用目前的直譯器，不依賴 PATH 上的 python3）
+TESTS_PASS = f"{sys.executable} -c 'import sys; sys.exit(0)'"
+TESTS_FAIL = f"{sys.executable} -c 'import sys; sys.exit(1)'"
+
 
 class Project:
     """暫存目錄裡的範例專案：AIR/ 的複本、.air/project.toml、套件 demo/。"""
 
-    def __init__(self, phase: str = "installed", allow_legacy: str = "", extra: str = "", git: bool = False):
+    def __init__(self, phase: str = "installed", allow_legacy: str = "", extra: str = "", git: bool = False,
+                 test_command: str = "", test_timeout: int = 600):
         self.root = Path(tempfile.mkdtemp(prefix="air-test-")).resolve()
         shutil.copytree(KIT, self.root / "AIR", ignore=shutil.ignore_patterns(".git", "tests", "__pycache__"))
-        self.write(".air/project.toml", PROJECT_TOML.format(phase=phase, allow=allow_legacy, extra=extra))
+        self.write(".air/project.toml", PROJECT_TOML.format(
+            phase=phase, allow=allow_legacy, extra=extra, test_command=json.dumps(test_command), test_timeout=test_timeout))
         (self.root / "demo").mkdir()
         (self.root / "demo" / "__init__.py").write_text("", encoding="utf-8")
         if git:
@@ -92,6 +100,18 @@ class Project:
     def check_all(self) -> list[str]:
         return [v.code for v in check(self.cfg()).hard]
 
+    def receipt(self) -> dict:
+        return json.loads((self.root / ".air" / "verify.json").read_text(encoding="utf-8"))
+
+    def history(self) -> list[dict]:
+        path = self.root / ".air" / "history.jsonl"
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+    def commit(self, message: str = "x") -> str:
+        subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", message], cwd=self.root, check=True, capture_output=True)  # 吃掉 pre-commit hook 的輸出
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+
     def air(self, *args: str, stdin: str = "", env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(self.root / "AIR" / "air.py"), *args],
@@ -111,7 +131,10 @@ class ProjectTestCase(unittest.TestCase):
     allow_legacy = ""
     extra = ""
     git = False
+    test_command = ""
+    test_timeout = 600
 
     def setUp(self) -> None:
-        self.p = Project(phase=self.phase, allow_legacy=self.allow_legacy, extra=self.extra, git=self.git)
+        self.p = Project(phase=self.phase, allow_legacy=self.allow_legacy, extra=self.extra, git=self.git,
+                         test_command=self.test_command, test_timeout=self.test_timeout)
         self.addCleanup(self.p.cleanup)

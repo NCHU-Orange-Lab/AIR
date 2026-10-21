@@ -7,8 +7,10 @@ description: 安裝 AIR、分析現有專案、規劃或執行分層遷移時使
 
 完整流程在 `AIR/START.md`，**照它做，一次只做一個階段**。
 
-1. 執行 `python3 AIR/air.py status`，看目前在哪個遷移階段
+1. 執行 `python3 AIR/air.py status`，看目前在哪個遷移階段、最近一次驗收的狀態
 2. 讀 `AIR/START.md` 中對應階段的那一節（不用讀其他階段）
 3. 做完該階段後**停下來**，向使用者報告，等使用者核准後才進入下一階段
 
-不論在哪個階段，都不要在同一個 commit 裡同時「改變行為」和「搬移程式」。
+- 每一批遷移與收尾的驗證用 `python3 AIR/air.py verify`（收尾用 `--scope final`），只跑 `check` 不算。
+- `python3 AIR/air.py phase <階段>` 被拒絕時，照它列出的原因處理；不要用 `--force`，除非使用者明確要求。
+- 不論在哪個階段，都不要在同一個 commit 裡同時「改變行為」和「搬移程式」。

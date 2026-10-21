@@ -208,6 +208,53 @@ class TestSoftRules(ProjectTestCase):
         self.assertIn("AIR102", self.p.soft_codes(src))
 
 
+class TestReport(ProjectTestCase):
+    """檢查結果要說清楚範圍：檢查了哪些、略過了哪些（為什麼）、有多少舊程式碼沒檢查。"""
+
+    def test_full_check_records_checked_and_legacy(self):
+        from airkit.checks import check
+        self.p.layer("steps", ok="x = 1\n")
+        self.p.write("demo/legacy.py", "y = 2\n")
+        r = check(self.p.cfg())
+        self.assertEqual(r.verdict, "pass")
+        self.assertEqual([p.name for p in r.checked], ["__init__.py", "ok.py"])
+        self.assertEqual([p.name for p in r.legacy], ["__init__.py", "legacy.py"])
+        self.assertIn("2 個檔案", r.summary(self.p.root))
+        self.assertIn("舊程式碼 2 個模組", r.summary(self.p.root))
+
+    def test_no_layer_directories_is_not_applicable(self):
+        from airkit.checks import check
+        r = check(self.p.cfg())
+        self.assertEqual((r.verdict, r.checked, r.hard), ("not_applicable", [], []))
+        self.assertIn("沒有檢查任何檔案", r.summary(self.p.root))
+
+    def test_explicit_paths_are_skipped_with_reasons(self):
+        from airkit.checks import MISSING, NOT_PY, OUTSIDE, check
+        self.p.layer("steps", ok="x = 1\n")
+        md = self.p.write("README.md", "x")
+        legacy = self.p.write("demo/legacy.py", "y = 2\n")
+        r = check(self.p.cfg(), [md, legacy, self.p.root / "demo" / "steps" / "ok.py", self.p.root / "nope.py"])
+        self.assertEqual(r.verdict, "input_error")
+        self.assertEqual({(p.name, why) for p, why in r.skipped}, {("README.md", NOT_PY), ("legacy.py", OUTSIDE), ("nope.py", MISSING)})
+        self.assertEqual([p.name for p in r.checked], ["ok.py"])
+        self.assertIn("nope.py", r.summary(self.p.root))
+
+    def test_violation_outranks_empty(self):
+        from airkit.checks import check
+        self.p.layer("steps", bad='print("x")\n')
+        self.assertEqual(check(self.p.cfg()).verdict, "violation")
+
+    def test_to_dict(self):
+        from airkit.checks import check
+        self.p.layer("steps", bad='print("x")\n')
+        d = check(self.p.cfg()).to_dict(self.p.root)
+        self.assertEqual(d["schema"], "air.check.v1")
+        self.assertEqual(d["verdict"], "violation")
+        self.assertEqual(d["hard"][0]["code"], "AIR001")
+        self.assertEqual(d["hard"][0]["path"], "demo/steps/bad.py")
+        self.assertEqual(d["checked"], ["demo/steps/__init__.py", "demo/steps/bad.py"])
+
+
 class TestScope(ProjectTestCase):
     def test_files_outside_layers_are_not_checked(self):
         self.p.write("demo/legacy.py", 'print("legacy is fine")\n')

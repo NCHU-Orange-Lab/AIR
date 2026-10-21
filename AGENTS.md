@@ -40,7 +40,8 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 
 ## 指令
 
-- 檢查：`python3 AIR/air.py check`（只檢查層內的程式）
+- 檢查：`python3 AIR/air.py check`（只檢查層內的程式；「沒有檢查任何檔案」不等於通過）
+- 驗收：`python3 AIR/air.py verify`（測試指令＋架構檢查，結果綁定這一版程式碼；每批遷移結束、收尾前必須通過）
 - 狀態：`python3 AIR/air.py status`
 - 不要用 `--no-verify`、`-n`、`SKIP=` 或修改 `core.hooksPath` 來略過 commit 前的檢查；這些寫法也會被擋下
 

@@ -140,13 +140,19 @@ def write_project_file(root: Path, package: str, package_dir: str) -> str:
     return "created"
 
 
+AIR_IGNORE = ["python", "verify.json"]  # 這台電腦的 Python 路徑、本機的驗收紀錄：都不進版本控制
+
+
 def write_python_file(root: Path) -> None:
     """記下這台電腦上可用的 Python 3.11+。路徑因機器而異，所以不進版本控制。"""
     air = root / ".air"
     (air / "python").write_text(sys.executable + "\n", encoding="utf-8")
     ignore = air / ".gitignore"
-    if not ignore.exists():
-        ignore.write_text("# 每台電腦各自的 Python 路徑，由 AIR/install.sh 產生\npython\n", encoding="utf-8")
+    existing = ignore.read_text(encoding="utf-8").splitlines() if ignore.exists() else []
+    missing = [name for name in AIR_IGNORE if name not in existing]
+    if missing:
+        header = [] if existing else ["# 由 AIR/install.sh 產生：這台電腦的 Python 路徑、本機的驗收紀錄"]
+        ignore.write_text("\n".join(existing + header + missing) + "\n", encoding="utf-8")
 
 
 def claude_md_path(root: Path) -> Path:
