@@ -7,13 +7,14 @@
   python3 AIR/air.py survey                  盤點現有程式碼（Markdown）
   python3 AIR/air.py status                  顯示套件、遷移階段、違規數
   python3 AIR/air.py phase <階段>            設定遷移階段
-  python3 AIR/air.py hook <post-edit|pre-bash|stop>   給 Claude Code hook 使用（從 stdin 讀 JSON）
+  python3 AIR/air.py hook <post-edit|pre-bash|stop>   給 hook 使用（從 stdin 讀 JSON；接受 Claude Code 與 Codex 的 payload）
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -50,8 +51,13 @@ def cmd_check(args) -> int:
 
 
 def cmd_install(args) -> int:
-    for line in install.install(project_root(), args.package, args.package_dir):
+    lines = install.install(project_root(), args.package, args.package_dir)
+    for line in lines:
         print(f"  {line}")
+    failed = [line for line in lines if line.startswith(install.FAILED)]
+    if failed:
+        print(f"AIR 安裝未完成：{len(failed)} 個接點失敗（見上面「失敗」的項目）。處理後再執行一次 sh AIR/install.sh，已完成的部分不會重做。", file=sys.stderr)
+        return 1
     print("AIR 安裝完成。下一步：照 AIR/START.md 進入分析階段。")
     return 0
 
@@ -88,14 +94,31 @@ def cmd_phase(args) -> int:
     return 0
 
 
-# ── Claude Code hooks ──
+# ── hooks（Claude Code、Codex）──
+
+# Codex apply_patch 的檔案標頭；Move to 是改名後的新路徑
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$", re.M)
+
+
+def edited_files(payload: dict) -> list[Path]:
+    """這次工具呼叫改到的檔案。Claude Code：tool_input.file_path；Codex：tool_input.command 是 patch 文字。"""
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        raise ValueError(f"tool_input 不是物件：{type(tool_input).__name__}")
+    base = Path(payload.get("cwd") or ".")
+    if "file_path" in tool_input:
+        names = [tool_input["file_path"]]
+    else:
+        names = PATCH_FILE.findall(tool_input.get("command", ""))
+    return [(base / name.strip()).resolve() for name in names]  # 絕對路徑時 base / name 就是 name
+
 
 def hook_post_edit(payload: dict) -> int:
-    path = Path(payload.get("tool_input", {}).get("file_path", ""))
-    if path.suffix != ".py":
+    paths = [p for p in edited_files(payload) if p.suffix == ".py"]
+    if not paths:
         return 0
     cfg = load()
-    report = check(cfg, [path])
+    report = check(cfg, paths)  # 已刪除的檔案 check() 會略過
     if report.hard:
         print("【這次修改已經寫入檔案，但違反規則，必須修正】", file=sys.stderr)
         for v in report.hard:
@@ -117,7 +140,7 @@ def hook_pre_bash(payload: dict) -> int:
 
 
 def hook_stop(payload: dict) -> int:
-    if payload.get("stop_hook_active"):
+    if payload.get("stop_hook_active") or payload.get("stopHookActive"):  # 後者是 Grok 的欄位名
         return 0  # 已經因為 Stop hook 繼續過一次，放行，避免無限迴圈
     cfg = load()
     report = check(cfg)
@@ -136,6 +159,9 @@ def cmd_hook(args) -> int:
         return {"post-edit": hook_post_edit, "pre-bash": hook_pre_bash, "stop": hook_stop}[args.event](payload)
     except ConfigError:
         return 0  # 還沒安裝完成（沒有 .air/project.toml）時，hook 不做任何事
+    except Exception as e:  # noqa: BLE001 — hook 自己的錯誤不能變成 AI 的程式違規，也不擋住工作；commit 前檢查仍會把關
+        print(f"AIR hook 內部錯誤（{type(e).__name__}：{e}）。這不是你的程式違規；commit 前檢查仍會把關。", file=sys.stderr)
+        return 0
 
 
 def main(argv: list[str]) -> int:
@@ -163,7 +189,7 @@ def main(argv: list[str]) -> int:
     }
     try:
         return handlers[args.cmd](args)
-    except (ConfigError, install.InstallError, ValueError) as e:
+    except (ConfigError, install.InstallError, ValueError, OSError) as e:
         print(f"錯誤：{e}", file=sys.stderr)
         return 1
 

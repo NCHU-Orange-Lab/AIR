@@ -1,8 +1,8 @@
 """判斷一行 shell 指令是否在略過 commit 前的檢查。PreToolUse（Bash）hook 使用。
 
 用 shlex 解析，避免把 commit 訊息裡的文字誤判成選項。
-這是盡力而為的防護：包在 `bash -c "..."`、變數展開、腳本檔裡的指令無法判斷。
-
+`bash -c "..."`、`sh -lc '...'` 裡的指令會拆開再檢查（最多三層）；解析不了的指令若含可疑字面值就保守擋下。
+這是盡力而為的防護：變數展開、腳本檔（`sh run.sh`）裡的指令無法判斷；權威的關卡是 commit 前檢查。
 """
 
 import re
@@ -16,6 +16,13 @@ LONG_WITH_ARG = {
 }
 GIT_GLOBAL_WITH_ARG = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 SEPARATORS = {";", "&&", "||", "|", "&"}
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+MAX_DEPTH = 3
+# git config 的唯讀用法（查 core.hooksPath 沒問題）與會改值的用法
+CONFIG_READ = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "get", "list"}
+CONFIG_WRITE = {"--unset", "--unset-all", "--add", "--replace-all", "--edit", "-e", "set", "unset", "--remove-section", "--rename-section"}
+# shlex 解析失敗（引號不成對）時，含這些字面值就擋下
+SUSPICIOUS = ("--no-verify", "core.hookspath", "skip=", ".git/hooks", "pre-commit uninstall")
 
 
 def split_commands(command: str) -> list[list[str]]:
@@ -68,6 +75,26 @@ def strip_env(tokens: list[str]) -> tuple[list[str], list[str]]:
     return env, rest
 
 
+def config_writes_hooks_path(args: list[str]) -> bool:
+    """`git config` 是否在設定 core.hooksPath（純查詢放行）。"""
+    low = [a.lower() for a in args]
+    if "core.hookspath" not in low or any(a in CONFIG_READ for a in low):
+        return False
+    if any(a in CONFIG_WRITE for a in low):
+        return True
+    return low.index("core.hookspath") != len(low) - 1  # 後面還有值就是在設定
+
+
+def shell_script(rest: list[str]) -> str | None:
+    """`bash -c '...'`、`sh -lc '...'` 裡的腳本；不是這種寫法回傳 None。"""
+    if rest[0].rsplit("/", 1)[-1] not in SHELLS:
+        return None
+    for i, arg in enumerate(rest[1:-1], start=1):
+        if arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]:
+            return rest[i + 1]
+    return None
+
+
 def check_hook_removal(prog: str, args: list[str]) -> str | None:
     if prog == "rm" and any(".git/hooks" in a for a in args):
         return "不能刪除 git hook。"
@@ -97,8 +124,8 @@ def check_git(env: list[str], rest: list[str]) -> str | None:
     if not rest:
         return None
     sub, args = rest[0], rest[1:]
-    if sub == "config" and any(a.lower() == "core.hookspath" for a in args):
-        return "不能修改 core.hooksPath。"
+    if sub == "config":
+        return "不能修改 core.hooksPath。" if config_writes_hooks_path(args) else None
     if sub != "commit":
         return None
     if any(e.startswith("SKIP=") for e in env):
@@ -108,13 +135,17 @@ def check_git(env: list[str], rest: list[str]) -> str | None:
     return None
 
 
-def check(command: str) -> str | None:
+def check(command: str, depth: int = 0) -> str | None:
     try:
         commands = split_commands(command)
-    except ValueError:  # 引號不成對等無法解析的情況，交給 git 自己報錯
-        return None
+    except ValueError:  # 引號不成對等無法解析的情況：含可疑字面值就擋，否則交給 shell 自己報錯
+        low = command.lower()
+        hit = next((s for s in SUSPICIOUS if s in low), None)
+        return f"這行指令無法解析，而且含有 `{hit}`，先擋下。" if hit else None
     for tokens in commands:
-        reason = check_one(list(tokens))
+        _env, rest = strip_env(tokens)
+        script = shell_script(rest) if rest and depth < MAX_DEPTH else None
+        reason = check(script, depth + 1) if script is not None else check_one(tokens)
         if reason:
             return reason
     return None

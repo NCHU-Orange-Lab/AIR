@@ -11,12 +11,13 @@
 from __future__ import annotations
 
 import ast
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config, Layer
 from .metrics import complexity, functions, statements
-from .pyast import alias_map, call_name, has_required_arg, import_targets, matches, qualified
+from .pyast import call_name, has_required_arg, import_targets, matches, qualified, scoped_calls
 
 GENERIC_EXTERNAL = (
     "只能 import 白名單模組（AIR/config.toml 的 imports.common，加上 .air/project.toml 的 imports.extra）。"
@@ -44,6 +45,15 @@ class Violation:
 class Report:
     hard: list[Violation] = field(default_factory=list)
     soft: list[Violation] = field(default_factory=list)
+
+
+def read_source(path: Path) -> str | Violation:
+    """依 Python 的 encoding cookie 讀原始碼；讀不了（編碼錯誤）就回 AIR000，不丟例外。"""
+    try:
+        with tokenize.open(path) as f:
+            return f.read()
+    except (SyntaxError, UnicodeDecodeError, LookupError) as e:
+        return Violation(path, 1, 1, "AIR000", f"無法解析：{e}")
 
 
 # ── 檔案與模組 ──
@@ -112,21 +122,21 @@ def import_violations(tree: ast.AST, package: str, layer: Layer, cfg: Config):
 # ── 呼叫（只檢查純的層）──
 
 def call_violations(tree: ast.AST, cfg: Config):
-    aliases = alias_map(tree)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node, aliases, bound in scoped_calls(tree):
         name, is_method = call_name(node)
         full = qualified(node.func, aliases)
         if full in cfg.banned_calls:
             yield node, "AIR006", f"`{full}()` is banned: {cfg.banned_calls[full]}"
-        elif not is_method and name in cfg.banned_builtins and name not in aliases:
+        elif not is_method and name in cfg.banned_builtins and name not in bound:
             yield node, "AIR001", f"`{name}()` is banned: {cfg.banned_builtins[name]}"
-        elif is_method and full is None and name in cfg.banned_methods:
+        elif is_method and name in cfg.banned_methods and not (full and full.startswith(cfg.package + ".")):
+            # 等價寫法 pd.DataFrame.to_csv(df, …) 也擋；只有解析到自己套件的模組函式才放行
             yield node, "AIR004", f"method `.{name}()` is banned: {cfg.banned_methods_msg}"
-        rule = cfg.required_args.get(name)
-        if rule and not has_required_arg(node, rule["keyword"], rule["position"]):
-            yield node, "AIR005", f"`{name}()` requires `{rule['keyword']}`: {rule['msg']}"
+        key = full.rsplit(".", 1)[-1] if full else name  # 別名過的建構式（rng = default_rng）也要對應回規則
+        rule = cfg.required_args.get(key)
+        # 同名的區域函式（def sample）不套用 pandas 的規則
+        if rule and (is_method or full or name not in bound) and not has_required_arg(node, rule["keyword"], rule["position"]):
+            yield node, "AIR005", f"`{key}()` requires `{rule['keyword']}`: {rule['msg']}"
 
 
 # ── 軟規則 ──
@@ -209,7 +219,10 @@ def cycle_violations(layer: Layer, cfg: Config, touched: set[Path] | None) -> li
         mod = module_of(f, cfg)
         if mod:
             files[mod[0]] = (f, mod[1])
-    sources = {m: (f.read_text(encoding="utf-8"), pkg) for m, (f, pkg) in files.items()}
+    sources = {}
+    for m, (f, pkg) in files.items():
+        source = read_source(f)
+        sources[m] = ("" if isinstance(source, Violation) else source, pkg)  # 讀不了的檔案在單檔檢查已報 AIR000
     out = []
     for cycle in find_cycles(import_graph(sources)):
         cycle_files = {files[m][0].resolve() for m in cycle}
@@ -234,9 +247,13 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
         mod = module_of(f, cfg) if layer else None
         if not mod:
             continue
-        r = check_source(f.read_text(encoding="utf-8"), mod[0], mod[1], layer, cfg, f)
-        report.hard += r.hard
-        report.soft += r.soft
+        source = read_source(f)
+        if isinstance(source, Violation):
+            report.hard.append(source)
+        else:
+            r = check_source(source, mod[0], mod[1], layer, cfg, f)
+            report.hard += r.hard
+            report.soft += r.soft
         touched.setdefault(layer.name, set()).add(f.resolve())
     for layer in cfg.layers.values():
         if layer.check_cycles and layer.name in touched:

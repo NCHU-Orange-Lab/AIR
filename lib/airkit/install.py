@@ -11,22 +11,26 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from .config import KIT_DIR, PROJECT_FILE, Config
+from .config import KIT_DIR, PROJECT_FILE, Config, ConfigError
 
 BEGIN, END = "AIR:BEGIN", "AIR:END"
 MANAGED = "AIR:MANAGED"
 SKILL_MARK = ".air-managed"
+FAILED = "失敗："  # 安裝結果中失敗項目的前綴（air.py 用它判斷安裝是否完成）
+# (事件, matcher, 腳本, timeout 秒)
 HOOKS = [
-    ("PreToolUse", "Bash", "pre_bash.sh"),
-    ("PostToolUse", "Edit|Write|MultiEdit", "post_edit.sh"),
-    ("Stop", None, "stop.sh"),
+    ("PreToolUse", "Bash", "pre_bash.sh", 30),
+    ("PostToolUse", "Edit|Write|MultiEdit", "post_edit.sh", 60),
+    ("Stop", None, "stop.sh", 120),
 ]
 RULE_HEADER = f"<!-- {MANAGED} 這個檔案由 AIR 產生，更新 AIR 時會覆蓋。要修改規則，請改 AIR 的開發 repo。 -->\n"
 SKIP_DIRS = {"tests", "test", "docs", "scripts", "AIR", ".air", "build", "dist", "examples", "venv", ".venv"}
@@ -34,6 +38,14 @@ SKIP_DIRS = {"tests", "test", "docs", "scripts", "AIR", ".air", "build", "dist",
 
 class InstallError(Exception):
     pass
+
+
+def describe_error(e: Exception) -> str:
+    if isinstance(e, PermissionError):
+        return f"沒有寫入權限（{e.filename}）。可能是 AI 工具的沙箱保護：請核准後重跑，或在自己的終端機執行 sh AIR/install.sh"
+    if isinstance(e, json.JSONDecodeError):
+        return f"JSON 格式錯誤（{e}）。修正後重跑 sh AIR/install.sh"
+    return str(e)
 
 
 # ── 標記區塊（Markdown、YAML）──
@@ -145,10 +157,14 @@ def claude_md_path(root: Path) -> Path:
 
 def ensure_instructions(root: Path) -> list[str]:
     claude = claude_md_path(root)
-    imports = ["@AIR/AGENTS.md"]
+
+    def rel(target: Path) -> str:  # @ 匯入相對於「包含它的檔案」解析：.claude/CLAUDE.md 要寫 ../
+        return os.path.relpath(target, claude.parent).replace(os.sep, "/")
+
+    imports = [f"@{rel(root / 'AIR' / 'AGENTS.md')}"]
     # 新建 CLAUDE.md 後，Claude Code 就不會再讀 AGENTS.md，所以要一併匯入
     if not claude.exists() and (root / "AGENTS.md").exists():
-        imports.insert(0, "@AGENTS.md")
+        imports.insert(0, f"@{rel(root / 'AGENTS.md')}")
     out = [f"{claude.relative_to(root)}：{ensure_block(claude, md_block(chr(10).join(imports)), BEGIN)}"]
     pointer = "本專案採用 AIR 規範。開始任何工作之前，先讀 `AIR/AGENTS.md`。"
     out.append(f"AGENTS.md：{ensure_block(root / 'AGENTS.md', md_block(pointer), BEGIN)}")
@@ -156,39 +172,28 @@ def ensure_instructions(root: Path) -> list[str]:
 
 
 def hook_command(script: str) -> str:
-    return f'"$CLAUDE_PROJECT_DIR"/AIR/hooks/{script}'
+    # 明確用 sh 執行：fresh checkout 的腳本沒有執行位元也能啟動
+    return f'sh "$CLAUDE_PROJECT_DIR"/AIR/hooks/{script}'
 
 
-def ensure_settings(root: Path) -> str:
-    path = root / ".claude" / "settings.json"
-    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    hooks = data.setdefault("hooks", {})
-    changed = False
-    for event, matcher, script in HOOKS:
-        entries = hooks.setdefault(event, [])
-        if any(script in h.get("command", "") and "AIR/hooks/" in h.get("command", "") for e in entries for h in e.get("hooks", [])):
-            continue
-        entry = {"hooks": [{"type": "command", "command": hook_command(script)}]}
-        if matcher:
-            entry = {"matcher": matcher, **entry}
-        entries.append(entry)
-        changed = True
-    if changed:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return "updated" if changed else "unchanged"
+def _legacy_hook_command(script: str) -> str:
+    return f'"$CLAUDE_PROJECT_DIR"/AIR/hooks/{script}'  # 2.0.0 的寫法，重新安裝時換成新的
 
 
-def remove_settings(root: Path) -> bool:
-    path = root / ".claude" / "settings.json"
-    if not path.exists():
-        return False
-    data = json.loads(path.read_text(encoding="utf-8"))
+def is_air_hook(hook: dict) -> bool:
+    """只認 AIR 自己產生的指令（完全相同），不用子字串比對，才不會誤認使用者的 hook。"""
+    command = hook.get("command", "")
+    return hook.get("type") == "command" and any(
+        command in (hook_command(script), _legacy_hook_command(script)) for _, _, script, _ in HOOKS
+    )
+
+
+def _strip_air_hooks(data: dict) -> None:
     hooks = data.get("hooks", {})
     for event in list(hooks):
         kept = []
         for entry in hooks[event]:
-            entry["hooks"] = [h for h in entry.get("hooks", []) if "AIR/hooks/" not in h.get("command", "")]
+            entry["hooks"] = [h for h in entry.get("hooks", []) if not is_air_hook(h)]
             if entry["hooks"]:
                 kept.append(entry)
         if kept:
@@ -197,6 +202,41 @@ def remove_settings(root: Path) -> bool:
             del hooks[event]
     if not hooks:
         data.pop("hooks", None)
+
+
+def _read_settings(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    return json.loads(text) if text.strip() else {}
+
+
+def ensure_settings(root: Path) -> str:
+    """先移除 AIR 的 hook（含舊格式）再重新加入，所以 matcher 與 timeout 一定是目前的版本。"""
+    path = root / ".claude" / "settings.json"
+    original = _read_settings(path)
+    data = copy.deepcopy(original)
+    _strip_air_hooks(data)
+    hooks = data.setdefault("hooks", {})
+    for event, matcher, script, timeout in HOOKS:
+        entry = {"hooks": [{"type": "command", "command": hook_command(script), "timeout": timeout}]}
+        if matcher:
+            entry = {"matcher": matcher, **entry}
+        hooks.setdefault(event, []).append(entry)
+    if data == original:
+        return "unchanged"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return "updated"
+
+
+def remove_settings(root: Path) -> bool:
+    path = root / ".claude" / "settings.json"
+    if not path.exists():
+        return False
+    original = _read_settings(path)
+    data = copy.deepcopy(original)
+    _strip_air_hooks(data)
+    if data == original:
+        return False
     if data:
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     else:
@@ -327,14 +367,21 @@ def install(root: Path, package: str | None, package_dir: str | None) -> list[st
                 raise InstallError(f"無法確定套件。候選：{shown}。請用 --package 與 --package-dir 指定。")
             package, package_dir = candidates[0]
         package_dir = package_dir or package
-    lines.append(f".air/project.toml：{write_project_file(root, package or '', package_dir or '')}")
-    write_python_file(root)
-    lines += ensure_instructions(root)
-    lines.append(f".claude/settings.json：{ensure_settings(root)}")
-    lines += [f"skill：{s}" for s in ensure_skills(root)]
-    if git_toplevel(root):
-        lines.append(ensure_commit_check(root))
-    lines += [f"規則：{r}" for r in refresh_rules(load(root))]
+    # 每個接點分開做：一個失敗（沙箱擋下寫入、settings.json 壞掉）不影響其他接點，最後列出失敗的項目。重跑是安全的。
+    steps = [
+        (".air/project.toml", lambda: [f".air/project.toml：{write_project_file(root, package or '', package_dir or '')}"]),
+        (".air/python", lambda: write_python_file(root) or []),
+        ("CLAUDE.md、AGENTS.md", lambda: ensure_instructions(root)),
+        (".claude/settings.json", lambda: [f".claude/settings.json：{ensure_settings(root)}"]),
+        ("skills", lambda: [f"skill：{s}" for s in ensure_skills(root)]),
+        ("commit 前檢查", lambda: [ensure_commit_check(root)] if git_toplevel(root) else []),
+        ("各層規則", lambda: [f"規則：{r}" for r in refresh_rules(load(root))]),
+    ]
+    for label, run in steps:
+        try:
+            lines += run()
+        except (OSError, ValueError, ConfigError) as e:
+            lines.append(f"{FAILED}{label}：{describe_error(e)}")
     return lines
 
 

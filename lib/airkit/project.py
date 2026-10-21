@@ -6,7 +6,7 @@ import ast
 import re
 from pathlib import Path
 
-from .checks import call_violations, check, classify, layer_of, module_of
+from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source
 from .config import KIT_DIR, PROJECT_FILE, Config
 from .pyast import import_targets, matches
 
@@ -47,8 +47,10 @@ def set_phase(cfg: Config, phase: str) -> None:
 
 def _module_facts(file: Path, cfg: Config) -> dict:
     module, is_package = module_of(file, cfg)
-    source = file.read_text(encoding="utf-8")
-    facts = {"module": module, "layer": (layer_of(file, cfg) or None), "lines": source.count("\n") + 1}
+    source = read_source(file)
+    facts = {"module": module, "layer": (layer_of(file, cfg) or None), "lines": file.read_bytes().count(b"\n") + 1}
+    if isinstance(source, Violation):
+        return {**facts, "error": "無法解析"}
     try:
         tree = ast.parse(source)
     except SyntaxError:
