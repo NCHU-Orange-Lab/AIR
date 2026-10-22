@@ -11,7 +11,7 @@ from airkit import rules
 
 FULLY_CHECKED = {"CTR-1", "CTR-3", "STEP-1", "FLOW-1", "FLOW-5", "ADP-6", "IO-4"}
 PARTIALLY_CHECKED = {"STEP-2", "STEP-3", "FLOW-2"}
-COUNTS = {"contracts": 5, "steps": 6, "flows": 5, "adapters": 6, "storage": 4, "main": 4, "tests": 5}
+COUNTS = {"contracts": 5, "steps": 6, "flows": 5, "adapters": 6, "storage": 5, "main": 4, "tests": 5}
 
 
 class TestCurrentRules(unittest.TestCase):
@@ -21,11 +21,24 @@ class TestCurrentRules(unittest.TestCase):
 
     def test_counts_and_coverage(self):
         self.assertEqual({name: len(rs) for name, rs in self.by_file.items()}, COUNTS)
-        self.assertEqual(len(self.all), 35)
+        self.assertEqual(len(self.all), 36)
         self.assertEqual({r.id for r in self.all if r.checked == rules.FULL}, FULLY_CHECKED)
         self.assertEqual({r.id for r in self.all if r.checked == rules.PARTIAL}, PARTIALLY_CHECKED)
-        self.assertEqual(sum(r.checked == rules.NONE for r in self.all), 25)
-        self.assertEqual(sum(len(rules.for_review(name)) for name in COUNTS), 28)  # 25 條沒檢查＋3 條部分檢查
+        self.assertEqual(sum(r.checked == rules.NONE for r in self.all), 26)
+        self.assertEqual(sum(len(rules.for_review(name)) for name in COUNTS), 29)  # 26 條沒檢查＋3 條部分檢查
+
+    def test_same_layer_import_rules_match_config(self):
+        # ADP-6、IO-4 說「同層可以、不能循環」：config 要真的允許同層 import，而且開著循環檢查、訊息指回這條規則
+        kit = tomllib.loads((KIT / "config.toml").read_text(encoding="utf-8"))
+        by_id = rules.by_id()
+        for layer, rule_id in (("adapters", "ADP-6"), ("storage", "IO-4")):
+            spec = kit["layers"][layer]
+            self.assertIn(layer, spec["internal"], layer)
+            self.assertEqual((spec["check-cycles"], spec["cycle-rule"]), (True, rule_id), layer)
+            self.assertIn("同層", by_id[rule_id].text)
+            self.assertIn("循環", by_id[rule_id].text)
+        self.assertIn("子套件", by_id["ADP-1"].text)
+        self.assertIn("imports.extra", by_id["CTR-4"].text)
 
     def test_ids_unique_and_numbered_from_one(self):
         ids = [r.id for r in self.all]

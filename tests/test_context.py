@@ -54,6 +54,12 @@ class TestInjection(ProjectTestCase):
         out = self.context_of(self.p.hook("pre-read", read_payload(self.p.root / "tests" / "test_a.py")))
         self.assertIn("TEST-1", out)
 
+    def test_file_in_adapter_subpackage_gets_adapter_rules(self):
+        # adapters/<工具>/ 底下的檔案（ADP-1 的子套件）也是 adapters 層
+        out = self.context_of(self.p.hook("pre-read", read_payload(self.p.root / "demo" / "adapters" / "torch" / "trainer.py")))
+        self.assertIn("ADP-1", out)
+        self.assertIn("AIR/rules/adapters.md", out)
+
     def test_files_outside_layers_get_nothing(self):
         for rel in ("demo/legacy.py", "README.md", "docs/AIR-遷移報告.md", "/etc/hosts"):
             with self.subTest(rel=rel):

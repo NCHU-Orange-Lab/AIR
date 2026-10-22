@@ -78,6 +78,13 @@ class TestScope(ReviewCase):
         (f,) = self.scope()["files"]
         self.assertEqual((f["layer"], [r["id"] for r in f["rules"]]), ("tests", ["TEST-1", "TEST-2", "TEST-3", "TEST-4", "TEST-5"]))
 
+    def test_adapter_subpackage_file_gets_adapter_rules(self):
+        self.p.write("demo/adapters/__init__.py", "")
+        self.p.write("demo/adapters/torch/__init__.py", "")
+        self.p.write("demo/adapters/torch/model.py", "class Net:\n    pass\n")
+        f = next(f for f in self.scope()["files"] if f["path"] == "demo/adapters/torch/model.py")
+        self.assertEqual((f["layer"], [r["id"] for r in f["rules"]]), ("adapters", ["ADP-1", "ADP-2", "ADP-3", "ADP-4", "ADP-5"]))  # ADP-6 由 check 負責
+
     def test_out_of_scope_files_are_listed_with_reason(self):
         self.p.write("demo/legacy.py", "x = 1\n")
         self.p.write("demo/flows/notes.md", "x\n")

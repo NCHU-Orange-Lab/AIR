@@ -14,12 +14,12 @@ description: 需要使用第三方工具或外部服務（YOLO 等模型、OCR�
 ## 步驟
 
 1. **定義介面**：在 `contracts/ports.py` 定義 Protocol，在 `contracts/types.py` 定義回傳型別。只寫實際會用到的方法；flow 需要處理多筆資料時，提供批次方法（例如 `detect_many`），避免在 flow 裡寫迴圈。
-2. **實作 adapter**：建立 `adapters/<工具名>.py`
+2. **實作 adapter**：建立 `adapters/<工具名>.py`。自己寫模型、資料管線或訓練迴圈（PyTorch 等）時改用子套件 `adapters/<工具名>/`，依業界慣用的角色切檔，只建需要的：`data.py`（Dataset、DataLoader、增強）、`model.py`（網路、層）、`loss.py`、`metrics.py`（框架版指標；numpy 版放 steps）、`trainer.py`（訓練迴圈、checkpoint、callbacks）、`predictor.py`（推論，實作 Protocol）。同層可以互相 import，但不能循環。
    - 關閉副作用（自動存檔、自動下載、log）
    - 推論、轉換時傳入記憶體中的資料（陣列、DataFrame）
    - 工具本身需要路徑時（權重、訓練輸出），路徑由參數傳入，來源是設定檔
    - 把工具的回傳物件轉成第 1 步定義的型別
-3. **不要改白名單**：純的層採用白名單，第三方工具本來就無法在那裡 import。不要把工具加進 `.air/project.toml` 的 imports.extra 來讓檢查放行。
+3. **不要改白名單**：純的層採用白名單，第三方工具本來就無法在那裡 import。不要把工具加進 `.air/project.toml` 的 imports.extra 來讓檢查放行。要讓框架的陣列型別（例如 `torch.Tensor`）跨層當資料用（CTR-4、ADP-2），是另一件事：先問使用者，同意才加進 imports.extra，並記進遷移報告。
 4. **注入**：flow 透過參數接收 Protocol 並呼叫它，再把結果（資料）傳給 steps。steps 不接收 Protocol。由 main 建立 adapter，再傳給 flow。
 5. **測試**：
    - flow 的單元測試用 Fake（實作同一個 Protocol），不要 mock 第三方工具本身
@@ -35,4 +35,4 @@ description: 需要使用第三方工具或外部服務（YOLO 等模型、OCR�
 
 ## 完整範例
 
-需要看具體程式碼時，才讀 `examples/detector.md`（以物件偵測模型為例）。
+需要看具體程式碼時才讀：`examples/detector.md`（工具自帶完整流程，以 YOLO 為例，一個檔案）；`examples/trainer.md`（自己寫模型、Dataset 與訓練迴圈，以 PyTorch 為例，一個子套件）。

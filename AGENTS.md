@@ -18,8 +18,8 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 | contracts | 最底層：資料型別與 Protocol，不依賴任何層 |
 | steps | 純函式：不碰 I/O、時間、亂數；除了 pandas、numpy 等資料函式庫，不用第三方套件 |
 | flows | 只串接步驟與注入的工具，不寫計算 |
-| adapters | 唯一可以使用第三方工具的地方；內部只能用 contracts |
-| storage | 所有讀寫；內部只能用 contracts |
+| adapters | 唯一可以使用第三方工具的地方；一個工具一個檔案或一個子套件；內部只能用 contracts 與同層（不能循環） |
+| storage | 所有讀寫；內部只能用 contracts 與同層（不能循環） |
 | main | 組裝與注入 |
 
 **還沒搬進任何層的程式是「舊程式碼」**：不受分層檢查，遷移期間可以修改，但**新的程式一律寫進對應的層**。
