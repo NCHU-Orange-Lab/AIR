@@ -166,7 +166,8 @@ class TestHookScripts(ProjectTestCase):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
         stop = next(c for c in commands if "stop.sh" in c)
         import subprocess
-        r = subprocess.run(stop, shell=True, cwd=self.p.root / "demo", input="{}", capture_output=True, text=True, env=env)
+        # 用 sh -c，不用 shell=True：Windows 的 shell=True 是 cmd.exe，不會展開 $(git rev-parse …)；宿主本來就是用 Git Bash 跑
+        r = subprocess.run(["sh", "-c", stop], cwd=self.p.root / "demo", input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("AIR001", r.stderr)
 
@@ -175,7 +176,7 @@ class TestHookScripts(ProjectTestCase):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
         import subprocess
         r = subprocess.run(["sh", str(self.p.root / "AIR" / "hooks" / "stop.sh")], cwd=self.p.root / "demo",
-                           input="{}", capture_output=True, text=True, env=env)
+                           input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("AIR001", r.stderr)
 
@@ -223,7 +224,8 @@ class TestHookScripts(ProjectTestCase):
     def test_commit_check_blocks_commit(self):
         import subprocess
         subprocess.run(["git", "add", "-A"], cwd=self.p.root, check=True)
-        r = subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=self.p.root, capture_output=True, text=True)
+        # 指定 UTF-8：hook 的訊息含中文，Windows 預設的 cp1252 解不開，讀取執行緒會當掉、stderr 變成 None
+        r = subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=self.p.root, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("AIR001", r.stdout + r.stderr)
 

@@ -181,9 +181,9 @@ class TestHookScriptsPassHost(ProjectTestCase):
         import subprocess
         payload = codex_patch(self.p.root, "Update File: .air/project.toml")
         script = str(self.p.root / "AIR" / "hooks" / "pre_edit.sh")
-        r = subprocess.run(["sh", script, "codex"], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True)
+        r = subprocess.run(["sh", script, "codex"], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertIn("additionalContext", r.stdout)  # codex：提醒
-        r = subprocess.run(["sh", script], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True)
+        r = subprocess.run(["sh", script], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertIn('"ask"', r.stdout)  # 沒給宿主：claude
 
 

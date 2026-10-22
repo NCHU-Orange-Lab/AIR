@@ -110,7 +110,7 @@ class Project:
     def commit(self, message: str = "x") -> str:
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
         subprocess.run(["git", "commit", "-q", "-m", message], cwd=self.root, check=True, capture_output=True)  # 吃掉 pre-commit hook 的輸出
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
 
     def air(self, *args: str, stdin: str = "", env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
