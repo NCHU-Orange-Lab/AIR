@@ -2,10 +2,10 @@
 
 把這個 `AIR/` 資料夾放進 Python 專案的根目錄，再對 AI 說一句話，AI 就會照這套規範安裝、分析你的專案，並分階段把它重構成分層架構。之後的開發，AI 也會持續遵守這套規範。
 
-- 需求：Python 3.11 以上、git。不需要安裝任何套件。
+- 需求：Python 3.11 以上、git。不需要安裝任何套件。Windows 另外需要 Git for Windows（hook 由 Git Bash 執行）；文件裡的 `python3` 在 Windows 可以換成 `python` 或 `py -3`，安裝程式與 hook 會自己找可用的 Python。
 - 目前只支援 Python 專案。
 - 版本：見 `VERSION`
-- 套件自己的測試：`tests/`（只用標準庫，`python3 -m unittest discover -s tests -t .`）；GitHub 上每次 push 到 `main` 與 pull request 都會用 Python 3.11 到 3.14 跑一遍（`.github/workflows/test.yml`）。
+- 套件自己的測試：`tests/`（只用標準庫，`python3 -m unittest discover -s tests -t .`）；GitHub 上每次 push 到 `main` 與 pull request 都會用 Python 3.11 到 3.14 在 ubuntu 與 Windows 各跑一遍，另外再把標準輸出入強制成 cp950 跑一遍（`.github/workflows/test.yml`）。
 
 ## 這套規範在做什麼
 
@@ -66,6 +66,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.air/history.jsonl` | 每次階段轉移的紀錄（時間、commit、方式、原因） | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
 | `.air/sessions/` | hook 的注入紀錄（哪個 session 已附過哪一層的規則） | 否 |
+| `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
 | `.air/verify.json` | 最近一次 `verify` 的結果，綁定當時的程式碼 | 否 |
 | `.air/review.json` | 最近一次語意審查的結果，綁定當時的變更 | 否 |
 | `docs/AIR-遷移報告.md` | AI 寫的分析、計畫與進度 | 是 |
@@ -73,7 +74,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 安裝程式不會覆蓋不是它建立的東西（原有的 skill、git hook、CLAUDE.md），遇到時會列出「略過」。
 
-**換一台電腦或重新 clone 之後**，要再執行一次 `sh AIR/install.sh`，產生 `.air/python`、`.air/hosts` 和 git hook。
+**換一台電腦或重新 clone 之後**，要再執行一次 `sh AIR/install.sh`，產生 `.air/python`、`.air/hosts` 和 git hook。沒有 `.air/python` 時（例如新的 git worktree），hook 會自己找可用的 Python；找不到就寫進 `.air/hook-errors.log` 並放行，`doctor` 會指出。
 
 ## 更新與移除
 
@@ -82,14 +83,16 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 ## 常用指令
 
-```sh
-python3 AIR/air.py status      # 套件、遷移階段、檢查範圍、違規數、最近驗收
-python3 AIR/air.py doctor      # 診斷接線：每個工具的 hook 與 skill、指引、套件完整性、commit 前檢查
-python3 AIR/air.py check       # 快速檢查所有層（加 --json 得到機器可讀的結果）
-python3 AIR/air.py verify      # 正式驗收：測試指令＋架構檢查，結果記在 .air/verify.json
-python3 AIR/air.py review      # 語意審查的範圍：這次變更改到的層內檔案、要對照哪些沒有程式檢查的規則（--result 交回結果）
-python3 AIR/air.py survey      # 盤點現有程式碼
-```
+一條指令一列（不放在同一個可執行的區塊裡：有些工具會把整個區塊一次執行）。
+
+| 指令 | 做什麼 |
+|---|---|
+| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、檢查範圍、違規數、hook 錯誤、最近驗收 |
+| `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查 |
+| `python3 AIR/air.py check` | 快速檢查所有層（加 `--json` 得到機器可讀的結果） |
+| `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查，結果記在 `.air/verify.json`（會跑整套測試） |
+| `python3 AIR/air.py review` | 語意審查的範圍：這次變更改到的層內檔案、要對照哪些沒有程式檢查的規則（`--result` 交回結果） |
+| `python3 AIR/air.py survey` | 盤點現有程式碼 |
 
 ## 更多說明
 

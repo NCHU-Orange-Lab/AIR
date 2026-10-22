@@ -5,6 +5,9 @@ Grok：Stop 的延續旗標是 stopHookActive（沒有 snake_case 別名）。
 """
 
 import json
+import os
+import subprocess
+import sys
 import unittest
 
 from tests.helpers import ProjectTestCase
@@ -93,12 +96,67 @@ class TestHookRobustness(ProjectTestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("AIR hook", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
+        # fail-open 不能靜默：寫進 .air/hook-errors.log，status 看得到
+        log = (self.p.root / ".air" / "hook-errors.log").read_text(encoding="utf-8")
+        self.assertIn("\thook post-edit\tJSONDecodeError", log)
+        self.assertIn("hook 錯誤（24 小時內）：1 次（最近一次 hook post-edit：JSONDecodeError", self.p.air("status").stdout)
+        self.assertEqual(json.loads(self.p.air("status", "--json").stdout)["hook_errors"], 1)
 
     def test_unexpected_payload_shape_fails_open_with_message(self):
         r = self.p.air("hook", "post-edit", stdin=json.dumps({"tool_input": "not a dict"}))
         self.assertEqual(r.returncode, 0)
         self.assertIn("AIR hook", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
+
+
+class TestHookLog(ProjectTestCase):
+    def test_recent_counts_only_last_24_hours_and_skips_bad_lines(self):
+        from airkit import hooklog
+        hooklog.log(self.p.root, "hook stop", "ValueError：x\ny")
+        path = self.p.root / ".air" / "hook-errors.log"
+        path.write_text(path.read_text(encoding="utf-8") + "2000-01-01T00:00:00Z\thook stop\t舊的\n不是紀錄\n", encoding="utf-8")
+        self.assertEqual([(w, r) for _, w, r in hooklog.recent(self.p.root)], [("hook stop", "ValueError：x y")])
+        self.assertIn("1 次（最近一次 hook stop：ValueError：x y", hooklog.describe(self.p.root))
+        self.assertEqual(hooklog.describe(self.p.root / "nowhere"), "無")
+
+
+class TestEncoding(ProjectTestCase):
+    """輸出入一律 UTF-8，不看系統語系。模擬 zh-TW Windows（cp950）：沒有這個保證，含中文的 payload 會解析失敗而放行，
+    規則注入與修法說明也會變成亂碼。"""
+    phase = "migrating"
+    CP950 = {"PYTHONIOENCODING": "cp950", "PYTHONUTF8": "0"}
+
+    def setUp(self):
+        super().setUp()
+        self.p.layer("steps")
+
+    def raw(self, event: str, payload: dict) -> subprocess.CompletedProcess:
+        """直接執行 air.py，拿原始位元組（不先解碼），環境模擬 cp950。"""
+        return subprocess.run([sys.executable, str(self.p.root / "AIR" / "air.py"), "hook", event],
+                              input=json.dumps(payload, ensure_ascii=False).encode("utf-8"), capture_output=True,
+                              cwd=self.p.root, env={**os.environ, **self.CP950})
+
+    def test_chinese_commit_message_is_still_blocked_under_cp950(self):
+        for cmd in ('git commit --no-verify -m "修正分層"', 'git commit -n -m "加入語意審查"', 'SKIP=air-check git commit -m "調整"'):
+            with self.subTest(cmd=cmd):
+                r = self.raw("pre-bash", {"tool_input": {"command": cmd}})
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("略過", r.stderr.decode("utf-8"))  # 理由也要看得懂
+
+    def test_hook_output_is_valid_utf8_json_under_cp950(self):
+        r = self.raw("session-start", {"session_id": "s1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.decode("utf-8"))  # 不是 UTF-8、不是 JSON 都會丟例外
+        self.assertIn("遷移階段：migrating", out["hookSpecificOutput"]["additionalContext"])
+        payload = {"session_id": "s1", "tool_name": "Read", "tool_input": {"file_path": str(self.p.root / "demo" / "steps" / "a.py")}}
+        r = self.raw("pre-read", payload)
+        self.assertIn("STEP-1", json.loads(r.stdout.decode("utf-8"))["hookSpecificOutput"]["additionalContext"])
+
+    def test_violation_message_is_readable_under_cp950(self):
+        f = self.p.write("demo/steps/bad.py", BAD)
+        r = self.raw("post-edit", {"tool_name": "Edit", "tool_input": {"file_path": str(f)}})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("已經寫入檔案", r.stderr.decode("utf-8"))
 
 
 class TestPreBash(ProjectTestCase):

@@ -28,10 +28,11 @@ GENERIC_EXTERNAL = (
 
 
 def rel(path: Path, root: Path) -> str:
+    """相對專案根目錄的路徑，一律用 / 分隔：給人看、給機器比對（審查結果、JSON）都一樣，Windows 上也不會變成反斜線。"""
     try:
-        return str(path.relative_to(root))
+        return path.relative_to(root).as_posix()
     except ValueError:
-        return str(path)
+        return path.as_posix()
 
 
 @dataclass(frozen=True)

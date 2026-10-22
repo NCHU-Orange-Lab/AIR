@@ -108,14 +108,14 @@ class TestSkillsPerHost(ProjectTestCase):
 class TestParse(unittest.TestCase):
     def test_claude_edit(self):
         e = hosts.parse({"session_id": "s", "tool_name": "Edit", "tool_input": {"file_path": "/x/a.py"}})
-        self.assertEqual((e.host.name, e.session_id, e.tool, e.files), ("claude", "s", "Edit", (Path("/x/a.py"),)))
+        self.assertEqual((e.host.name, e.session_id, e.tool, e.files), ("claude", "s", "Edit", (Path("/x/a.py").resolve(),)))
         self.assertFalse(e.stop_active)
 
     def test_codex_patch_relative_paths_use_payload_cwd(self):
         patch = "*** Begin Patch\n*** Add File: a.py\n*** Update File: b/c.py\n*** Delete File: d.py\n*** Move to: e.py\n*** End Patch"
         e = hosts.parse({"tool_name": "apply_patch", "cwd": "/root", "tool_input": {"command": patch}}, "codex")
         self.assertEqual(e.host, hosts.CODEX)
-        self.assertEqual(e.files, (Path("/root/a.py"), Path("/root/b/c.py"), Path("/root/d.py"), Path("/root/e.py")))
+        self.assertEqual(e.files, tuple(Path(p).resolve() for p in ("/root/a.py", "/root/b/c.py", "/root/d.py", "/root/e.py")))
 
     def test_grok_camel_case_fields(self):
         e = hosts.parse({"sessionId": "g", "toolName": "search_replace", "stopHookActive": True, "tool_input": {"file_path": "/x.py"}})
@@ -181,9 +181,9 @@ class TestHookScriptsPassHost(ProjectTestCase):
         import subprocess
         payload = codex_patch(self.p.root, "Update File: .air/project.toml")
         script = str(self.p.root / "AIR" / "hooks" / "pre_edit.sh")
-        r = subprocess.run(["sh", script, "codex"], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True)
+        r = subprocess.run(["sh", script, "codex"], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertIn("additionalContext", r.stdout)  # codex：提醒
-        r = subprocess.run(["sh", script], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True)
+        r = subprocess.run(["sh", script], cwd=self.p.root / "demo", input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertIn('"ask"', r.stdout)  # 沒給宿主：claude
 
 

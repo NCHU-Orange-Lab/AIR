@@ -23,6 +23,7 @@ class TestRepoManifest(unittest.TestCase):
         self.assertIn("lib/airkit/checks.py", names)
         self.assertIn("hooks/pre_edit.sh", names)
         self.assertIn("hooks/session_start.sh", names)
+        self.assertIn("hooks/_python.sh", names)
 
 
 class TestManifest(ProjectTestCase):
@@ -72,7 +73,8 @@ class TestManifest(ProjectTestCase):
 
     def test_crlf_checkout_does_not_matter(self):
         path = self.kit / "README.md"
-        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        # 先還原成 LF 再換成 CRLF：Windows 的 checkout（autocrlf）本來就是 CRLF，直接換會變成 \r\r\n
+        path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
         self.assertEqual(self.p.air("check").returncode, 0)
 
     def test_single_file_check_does_not_run_integrity(self):

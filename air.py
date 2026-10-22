@@ -35,9 +35,14 @@ if sys.version_info < (3, 11):
     sys.exit("AIR 需要 Python 3.11 以上。")
 
 sys.dont_write_bytecode = True  # 不在使用者專案的 AIR/ 裡產生 __pycache__
+# 輸出入一律 UTF-8，不看系統語系：hook 的 payload、回應與檢查訊息都含中文。Windows 的 cp950 會把規則變亂碼，
+# 還會讓含中文的 payload 解析失敗而放行（guard 時有時無）。errors="replace" 讓壞掉的位元組不會變成例外。
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import context, doctor, guard, hosts, install, integrity, project, protect, review, verify  # noqa: E402
+from airkit import context, doctor, guard, hooklog, hosts, install, integrity, project, protect, review, verify  # noqa: E402
 from airkit.checks import EXIT, check, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -164,7 +169,8 @@ def cmd_phase(args) -> int:
 # payload 由 hosts.parse() 正規化；回應用 exit code（2＝擋下／駁回／要求繼續，stderr 是理由）或 hookSpecificOutput 的 JSON。
 
 def hook_output(event_name: str, **fields) -> None:
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name, **fields}}, ensure_ascii=False))
+    # ensure_ascii=True：回應只含 ASCII，跟宿主用什麼編碼讀都無關（\uXXXX 由宿主的 JSON 解析還原）
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name, **fields}}, ensure_ascii=True))
 
 
 def hook_session_start(event: hosts.Event, cfg: Config) -> int:
@@ -261,6 +267,7 @@ def cmd_hook(args) -> int:
     except ConfigError:
         return 0  # 還沒安裝完成（沒有 .air/project.toml）時，hook 不做任何事
     except Exception as e:  # noqa: BLE001 — hook 自己的錯誤不能變成 AI 的程式違規，也不擋住工作；commit 前檢查仍會把關
+        hooklog.log(project_root(), f"hook {args.event}", f"{type(e).__name__}：{e}")  # fail-open 但不能靜默：status、doctor 會顯示
         print(f"AIR hook 內部錯誤（{type(e).__name__}：{e}）。這不是你的程式違規；commit 前檢查仍會把關。", file=sys.stderr)
         return 0
 

@@ -190,6 +190,15 @@ class TestSurveyAndStatus(ProjectTestCase):
         self.assertIn("舊程式碼模組 2 個", out)
         self.assertIn("最近驗收：無", out)
 
+    def test_status_has_local_time_and_hook_errors(self):
+        self.p.layer("steps", ok="x = 1\n")
+        out = project.status(self.p.cfg())
+        self.assertRegex(out, r"本機時間：\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{4}")  # AI 寫日期的依據
+        self.assertIn("hook 錯誤（24 小時內）：無", out)
+        d = project.status_data(self.p.cfg())
+        self.assertEqual(d["hook_errors"], 0)
+        self.assertRegex(d["time"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{4}$")
+
     def test_status_json(self):
         self.p.layer("steps", ok="x = 1\n")
         r = self.p.air("status", "--json")

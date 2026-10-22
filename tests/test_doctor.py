@@ -26,6 +26,8 @@ class TestDoctor(ProjectTestCase):
         self.assertEqual(self.levels()["fail"], [])
         self.assertIn("[OK] Claude Code：.claude/settings.json 有 6 個 AIR hook", r.stdout)
         self.assertIn("[OK] Codex：.codex/hooks.json 有 5 個 AIR hook", r.stdout)
+        self.assertIn("[OK] Claude Code：hook 冒煙測試：6 個都能執行", r.stdout)
+        self.assertIn("[OK] Codex：hook 冒煙測試：5 個都能執行", r.stdout)
         self.assertIn("[OK] commit 前檢查", r.stdout)
         self.assertTrue(any("信任" in w for w in self.levels()["warn"]))  # Codex 的 hook 要信任，AIR 無法確認
 
@@ -99,6 +101,22 @@ class TestDoctor(ProjectTestCase):
         path = self.p.root / "AIR" / "config.toml"
         path.write_text(path.read_text(encoding="utf-8") + "\n# x\n", encoding="utf-8")
         self.assertTrue(any("AIR/config.toml" in f for f in self.levels()["fail"]))
+
+    def test_broken_hook_script_is_caught_by_smoke_test(self):
+        # 宿主對 0、2 以外的結束碼一律放行（Windows 找不到 Python 時就是 exit 49）：只看設定抓不到，要真的跑一次
+        (self.p.root / "AIR" / "hooks" / "stop.sh").write_text("#!/bin/sh\nexit 49\n", encoding="utf-8")
+        fails = self.levels()["fail"]
+        self.assertTrue(any("hook stop.sh 跑不起來（exit 49" in f for f in fails), fails)
+
+    def test_hook_output_that_is_not_utf8_json_is_caught_by_smoke_test(self):
+        (self.p.root / "AIR" / "hooks" / "session_start.sh").write_text("#!/bin/sh\nprintf '{\"a\": \"\\260\\241\"}'\n", encoding="utf-8")
+        fails = self.levels()["fail"]
+        self.assertTrue(any("session_start.sh 的輸出不是合法的 UTF-8 JSON" in f for f in fails), fails)
+
+    def test_recent_hook_errors_are_a_note(self):
+        from airkit import hooklog
+        hooklog.log(self.p.root, "hook stop", "ValueError：x")
+        self.assertTrue(any("hook 失敗 1 次" in w and "hook stop：ValueError：x" in w for w in self.levels()["warn"]))
 
     def test_not_installed_project_reports_config_problem_but_runs(self):
         (self.p.root / ".air" / "project.toml").unlink()

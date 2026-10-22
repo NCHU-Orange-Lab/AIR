@@ -3,7 +3,10 @@
 import json
 import os
 import stat
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 
 from tests.helpers import ProjectTestCase
 from airkit import hosts, install
@@ -163,7 +166,8 @@ class TestHookScripts(ProjectTestCase):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
         stop = next(c for c in commands if "stop.sh" in c)
         import subprocess
-        r = subprocess.run(stop, shell=True, cwd=self.p.root / "demo", input="{}", capture_output=True, text=True, env=env)
+        # 用 sh -c，不用 shell=True：Windows 的 shell=True 是 cmd.exe，不會展開 $(git rev-parse …)；宿主本來就是用 Git Bash 跑
+        r = subprocess.run(["sh", "-c", stop], cwd=self.p.root / "demo", input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("AIR001", r.stderr)
 
@@ -172,14 +176,56 @@ class TestHookScripts(ProjectTestCase):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
         import subprocess
         r = subprocess.run(["sh", str(self.p.root / "AIR" / "hooks" / "stop.sh")], cwd=self.p.root / "demo",
-                           input="{}", capture_output=True, text=True, env=env)
+                           input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("AIR001", r.stderr)
+
+    def run_hook_with_path(self, bin_dir: Path, script: str = "stop.sh") -> subprocess.CompletedProcess:
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(["sh", str(self.p.root / "AIR" / "hooks" / script)], cwd=self.p.root / "demo", input="{}",
+                              capture_output=True, text=True, encoding="utf-8", env=env)
+
+    def fake_bin(self, python_ok: bool) -> Path:
+        """放在 PATH 最前面的假指令：python3.x、python3 都像 Microsoft Store 的假指令一樣有指令卻跑不起來；python 依參數決定能不能用。"""
+        bin_dir = self.p.root / "fakebin"
+        bin_dir.mkdir()
+        for name in ("python3.14", "python3.13", "python3.12", "python3.11", "python3", "py") + (("python",) if not python_ok else ()):
+            self.p.write(f"fakebin/{name}", "#!/bin/sh\nexit 9009\n")
+            (bin_dir / name).chmod(0o755)
+        if python_ok:
+            self.p.write("fakebin/python", f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+            (bin_dir / "python").chmod(0o755)
+        return bin_dir
+
+    @unittest.skipIf(sys.platform == "win32", "用 PATH 上的假指令模擬 Windows 的情況，本身需要 POSIX 的執行位元")
+    def test_hook_falls_back_to_python_when_python3_is_a_stub_and_air_python_is_missing(self):
+        # 新的 git worktree 沒有 .air/python；Windows 的 python3 是 Store 假指令：hook 要自己找到 python，不能整個靜默失效
+        (self.p.root / ".air" / "python").unlink()
+        r = self.run_hook_with_path(self.fake_bin(python_ok=True))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("AIR001", r.stderr)
+        self.assertFalse((self.p.root / ".air" / "hook-errors.log").exists())
+
+    @unittest.skipIf(sys.platform == "win32", "用 PATH 上的假指令模擬 Windows 的情況，本身需要 POSIX 的執行位元")
+    def test_hook_without_any_python_logs_and_fails_open_but_commit_check_blocks(self):
+        (self.p.root / ".air" / "python").unlink()
+        bin_dir = self.fake_bin(python_ok=False)
+        r = self.run_hook_with_path(bin_dir)
+        self.assertEqual(r.returncode, 0, r.stderr)  # 放行，但不能靜默
+        self.assertIn("找不到 Python", r.stderr)
+        log = (self.p.root / ".air" / "hook-errors.log").read_text(encoding="utf-8")
+        self.assertIn("stop.sh\t找不到 Python", log)
+        self.assertIn("hook 錯誤（24 小時內）：1 次", self.p.air("status").stdout)
+        r = self.run_hook_with_path(bin_dir, "commit_check.sh")  # commit 前檢查是關卡：找不到 Python 要擋下，不能放行
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("commit 已擋下", r.stderr)
 
     def test_commit_check_blocks_commit(self):
         import subprocess
         subprocess.run(["git", "add", "-A"], cwd=self.p.root, check=True)
-        r = subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=self.p.root, capture_output=True, text=True)
+        # 指定 UTF-8：hook 的訊息含中文，Windows 預設的 cp1252 解不開，讀取執行緒會當掉、stderr 變成 None
+        r = subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=self.p.root, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("AIR001", r.stdout + r.stderr)
 
@@ -203,7 +249,7 @@ class TestFullInstall(ProjectTestCase):
         self.assertIn("信任", r.stdout)  # Codex 的 hook 要使用者信任
         self.assertTrue(os.access(self.p.root / ".git" / "hooks" / "pre-commit", os.X_OK))
         ignore = (self.p.root / ".air" / ".gitignore").read_text(encoding="utf-8").split()
-        for name in ("python", "hosts", "verify.json", "review.json", "sessions"):
+        for name in ("python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log"):
             self.assertIn(name, ignore)
         r2 = self.p.air("install")
         self.assertEqual(r2.returncode, 0)
@@ -229,7 +275,7 @@ class TestFullInstall(ProjectTestCase):
         self.assertTrue((self.p.root / "CLAUDE.md").exists())
         self.assertNotIn("Traceback", r.stderr)
 
-    @unittest.skipIf(os.geteuid() == 0, "root 不受檔案權限限制")
+    @unittest.skipIf(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0, "root 與 Windows 不受檔案權限限制")
     def test_permission_error_is_reported_not_crashed(self):
         hooks_dir = self.p.root / ".git" / "hooks"
         hooks_dir.mkdir(exist_ok=True)

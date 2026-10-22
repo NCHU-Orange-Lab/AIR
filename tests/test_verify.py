@@ -8,8 +8,8 @@ import unittest
 from tests.helpers import TESTS_FAIL, TESTS_PASS, ProjectTestCase
 from airkit import verify
 
-TESTS_SLOW = f"{sys.executable} -c 'import time; time.sleep(30)'"
-TESTS_MUTATE = f"{sys.executable} -c \"open('demo/generated.py', 'w').write('x = 1')\""  # 測試期間改到 .py
+TESTS_SLOW = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+TESTS_MUTATE = f'"{sys.executable}" -c "open(\'demo/generated.py\', \'w\').write(\'x = 1\')"'  # 測試期間改到 .py
 
 
 class TestAccepted(ProjectTestCase):

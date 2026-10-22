@@ -36,7 +36,7 @@ def now() -> str:
 def git(root: Path, *args: str) -> str | None:
     """git 指令的 stdout；不是 git repo、沒有 commit 或沒有 git 時回傳 None。"""
     try:
-        out = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True)
+        out = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
     return out.stdout.strip()
@@ -90,13 +90,16 @@ def tail(text: str) -> str:
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
-    """結束整個程序群組（shell 與它啟動的測試），不只 shell 本身。"""
+    """結束整個程序樹（shell 與它啟動的測試），不只 shell 本身。POSIX 用程序群組；Windows 沒有 killpg，
+    只殺 shell 的話測試會繼續跑、communicate() 一直等，所以用 taskkill /T。"""
     try:
-        if hasattr(os, "killpg"):
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+        elif hasattr(os, "killpg"):
             os.killpg(proc.pid, signal.SIGKILL)
         else:
             proc.kill()
-    except ProcessLookupError:
+    except (ProcessLookupError, OSError):
         pass
 
 

@@ -40,7 +40,7 @@ class ReviewCase(ProjectTestCase):
         self.base = self.p.commit("baseline")
 
     def git(self, *args) -> str:
-        return subprocess.run(["git", *args], cwd=self.p.root, capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(["git", *args], cwd=self.p.root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
 
     def scope(self, *args) -> dict:
         r = self.p.air("review", "--json", *args)
@@ -241,6 +241,11 @@ class TestResult(ReviewCase):
 
     def test_partially_checked_rule_is_allowed(self):
         self.assertEqual(self.submit(result([finding(rule="FLOW-2")])).returncode, 1)
+
+    def test_backslash_path_from_windows_reviewer_is_normalised(self):
+        r = self.submit(result([finding(path="demo\\flows\\report.py")]))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(self.record()["findings"][0]["path"], "demo/flows/report.py")
 
     def test_path_outside_scope(self):
         self.p.write("demo/legacy.py", "x = 1\n")
