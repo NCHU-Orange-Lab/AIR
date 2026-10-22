@@ -12,6 +12,8 @@ test-timeout = 600              # verify 執行測試指令的上限（秒）
 
 [imports]
 # 純的層額外允許 import 的外部模組。新增前要經使用者同意。
+# 只放「資料函式庫」（純計算、陣列型別，例如 scipy；或經同意讓 torch 的張量跨層當資料用）；
+# 工具（模型、外部服務）不加，包成 adapter（見 skill air-wrap-tool）。
 extra = []
 
 [migration]

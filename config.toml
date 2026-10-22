@@ -23,6 +23,7 @@ common = [
 # 每一層都是套件底下的子套件（例如 src/shop/steps/）。
 # internal：這一層可以 import 的層（可以指定到模組，例如 contracts.types）。依賴方向（AIR007）每次編輯都會檢查。
 # pure：純的層會檢查外部 import 白名單、I/O、時間、亂數。
+# check-cycles：允許同層 import 的層，再檢查層內的模組不能循環 import（AIR003，訊息帶 cycle-rule）。
 
 [layers.contracts]
 pure = true
@@ -43,13 +44,17 @@ cycle-rule = "FLOW-5"
 
 [layers.adapters]
 pure = false
-internal = ["contracts"]
+internal = ["adapters", "contracts"]   # 同層可以互相 import（一個工具拆成子套件時，trainer 要用 model、data）
 rule = "ADP-6"
+check-cycles = true
+cycle-rule = "ADP-6"
 
 [layers.storage]
 pure = false
-internal = ["contracts"]
+internal = ["storage", "contracts"]    # 同層可以互相 import（catalog 共用各種格式的讀寫函式）
 rule = "IO-4"
+check-cycles = true
+cycle-rule = "IO-4"
 
 [layers.main]
 pure = false

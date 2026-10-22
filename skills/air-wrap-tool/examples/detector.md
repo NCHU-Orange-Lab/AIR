@@ -32,6 +32,8 @@ class Detector(Protocol):
 
 ## 2. Adapter：<套件目錄>/adapters/yolo.py
 
+工具自帶完整的訓練與推論流程，一個檔案就夠（ADP-1）。自己寫模型、Dataset、訓練迴圈時改用子套件，見 `trainer.md`。
+
 ```python
 import numpy as np
 from ultralytics import YOLO

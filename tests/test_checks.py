@@ -92,6 +92,29 @@ class TestLayerDirection(ProjectTestCase):
     def test_adapters_cannot_import_steps(self):
         self.assertEqual(self.p.codes("from demo.steps import clean\n", layer="adapters"), ["AIR007"])
 
+    def test_adapters_may_import_same_layer_flat_or_subpackage(self):
+        # 一個工具拆成子套件時（ADP-1），trainer 要用 model、data：同層 import 放行（ADP-6）
+        self.assertEqual(self.p.codes("from demo.adapters.yolo import YoloDetector\n", layer="adapters"), [])
+        src = "from demo.adapters.torch.model import Net\nfrom demo.contracts.types import Prediction\n"
+        self.assertEqual(self.p.codes(src, layer="adapters", module="torch.trainer"), [])
+        self.assertEqual(self.p.codes("from .model import Net\nfrom . import data\n", layer="adapters", module="torch.trainer"), [])
+
+    def test_adapters_still_cannot_import_other_layers(self):
+        for src in ("from demo.flows import report\n", "from demo.storage import catalog\n", "from demo.main import run\n", "import demo.steps.clean\n"):
+            with self.subTest(src=src):
+                self.assertEqual(self.p.codes(src, layer="adapters", module="torch.trainer"), ["AIR007"])
+
+    def test_storage_may_import_same_layer_but_not_adapters(self):
+        self.assertEqual(self.p.codes("from demo.storage.readers import read_image\n", layer="storage", module="catalog"), [])
+        self.assertEqual(self.p.codes("from demo.adapters.yolo import YoloDetector\n", layer="storage"), ["AIR007"])
+
+    def test_direction_message_lists_what_is_allowed(self):
+        from airkit.checks import check_source
+        cfg = self.p.cfg()
+        path = self.p.root / "demo" / "adapters" / "m.py"
+        report = check_source("from demo.steps import clean\n", "demo.adapters.m", False, cfg.layers["adapters"], cfg, path)
+        self.assertIn("可以 import：adapters、contracts", report.hard[0].msg)
+
     def test_main_may_import_all(self):
         src = "from demo.steps import a\nfrom demo.flows import b\nfrom demo.storage import c\n"
         self.assertEqual(self.p.codes(src, layer="main"), [])
@@ -192,6 +215,39 @@ class TestCycles(ProjectTestCase):
     def test_no_cycle(self):
         self.p.layer("flows", a="from demo.flows import b\n", b="x = 1\n")
         self.assertEqual(self.p.check_all(), [])
+
+    def subpackage(self, layer: str, tool: str, **files: str) -> None:
+        self.p.layer(layer)
+        self.p.write(f"demo/{layer}/{tool}/__init__.py", "")
+        for module, source in files.items():
+            self.p.write(f"demo/{layer}/{tool}/{module}.py", source)
+
+    def test_acyclic_adapter_subpackage_passes(self):
+        # 業界慣例的角色切檔：data、model、trainer、predictor 互相 import，沒有循環
+        self.subpackage("adapters", "torch", data="x = 1\n", model="from .data import x\n",
+                        trainer="from .model import x\nfrom . import data\n", predictor="from demo.adapters.torch.model import x\n")
+        self.p.write("demo/adapters/torch/__init__.py", "from .predictor import x\nfrom .trainer import x as train\n")
+        self.assertEqual(self.p.check_all(), [])
+
+    def test_cycle_in_adapter_subpackage_is_air003_with_adp6(self):
+        from airkit.checks import check
+        self.subpackage("adapters", "torch", model="from .trainer import fit\n", trainer="from .model import Net\n")
+        (v,) = check(self.p.cfg()).hard
+        self.assertEqual(v.code, "AIR003")
+        self.assertIn("ADP-6", v.msg)
+        self.assertIn("demo.adapters.torch.model → demo.adapters.torch.trainer → demo.adapters.torch.model", v.msg)
+
+    def test_cycle_in_storage_is_air003_with_io4(self):
+        from airkit.checks import check
+        self.p.layer("storage", catalog="from demo.storage import readers\n", readers="from demo.storage.catalog import load\n")
+        (v,) = check(self.p.cfg()).hard
+        self.assertEqual((v.code, "IO-4" in v.msg), ("AIR003", True))
+
+    def test_single_file_check_only_reports_cycles_touching_that_file(self):
+        from airkit.checks import check
+        self.subpackage("adapters", "torch", model="from .trainer import fit\n", trainer="from .model import Net\n", other="y = 1\n")
+        self.assertEqual(check(self.p.cfg(), [self.p.root / "demo" / "adapters" / "torch" / "other.py"]).hard, [])
+        self.assertEqual([v.code for v in check(self.p.cfg(), [self.p.root / "demo" / "adapters" / "torch" / "model.py"]).hard], ["AIR003"])
 
 
 class TestSoftRules(ProjectTestCase):

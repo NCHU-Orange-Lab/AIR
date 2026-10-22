@@ -37,6 +37,7 @@
 3. **跑一次測試**，記錄結果。測試本來就失敗的話，記下來並告訴使用者；**不要在這個階段修測試**。
 4. 複製 `AIR/templates/遷移報告.md` 到 `docs/AIR-遷移報告.md`，填寫「現況」與「分析」兩節：
    - 每個模組建議歸到哪一層，以及理由（依 survey 的訊號：有 I/O 的歸 storage、用第三方工具的歸 adapters、純計算的歸 steps、負責串接的歸 flows、進入點歸 main）
+   - 自己寫的模型、資料管線、訓練迴圈也歸 adapters：一個工具一個子套件，依角色切檔（`data.py`、`model.py`、`trainer.py`、`predictor.py`…，見 skill `air-wrap-tool`）；只有前後處理與 numpy 版的指標是 steps
    - **混在一起的模組**（例如同一個函式裡又讀檔又計算）要特別標出來，這類模組需要拆開
    - 測試覆蓋不足、風險高的地方
 5. `python3 AIR/air.py phase analyzed`（會確認 `test-command` 已設定、遷移報告存在）
