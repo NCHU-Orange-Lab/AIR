@@ -4,7 +4,7 @@
 
 **共通原則**
 - **一次只做一個階段。** 每個階段結束都要停下來，向使用者報告結果，等使用者明確核准後才進入下一階段。
-- 先執行 `python3 AIR/air.py status`，確認目前在哪個階段，只讀那個階段的說明。（還沒安裝時，這個指令會回報找不到 `.air/project.toml`，表示要從階段 1 開始。）
+- 先執行 `python3 AIR/air.py status`，確認目前在哪個階段，只讀那個階段的說明（有 hook 的工具在 session 開始時會自動附上狀態）。（還沒安裝時，這個指令會回報找不到 `.air/project.toml`，表示要從階段 1 開始。）
 - 不要在同一個 commit 裡同時「改變行為」和「搬移程式」。
 - 不要修改 `AIR/` 底下的任何檔案（編輯工具會被擋下；用其他方式改了，結束前與 commit 前的檢查會回報 AIR009）。
 - 判斷不確定時（某段程式該放哪一層、某個模組可不可以加進白名單），**問使用者**，不要自己決定。
@@ -20,8 +20,8 @@
    - `AIR/` 是否直接放在 git repo 的根目錄？
    - `git status` 是否乾淨？不乾淨的話，請使用者先 commit 或暫存現有的修改。
 2. **確認套件**：找出專案的主要套件（例如 `src/shop/` 或 `shop/`）。只有一個候選時直接用；有多個或找不到時，列出候選並問使用者。
-3. **執行安裝**：`sh AIR/install.sh`（需要指定時：`sh AIR/install.sh --package shop --package-dir src/shop`）
-4. 向使用者報告安裝程式列出的接點，以及任何「略過」或「無法自動加入」的項目。
+3. **執行安裝**：`sh AIR/install.sh`（需要指定時：`sh AIR/install.sh --package shop --package-dir src/shop`；只用一種工具時加 `--host claude` 或 `--host codex`）
+4. 向使用者報告安裝程式列出的接點，以及任何「略過」或「無法自動加入」的項目；用 Codex 時提醒使用者要在 Codex 裡信任 AIR 的 hook。`python3 AIR/air.py doctor` 可以確認接線。
 5. 請使用者確認後 commit：`安裝 AIR 規範`。
 
 **停下來**，等使用者核准後進入階段 2。
@@ -63,7 +63,7 @@
 
 ## 階段 4：建立分層
 
-1. `python3 AIR/air.py layers`：建立各層的目錄，並放入各層的 `CLAUDE.md`。
+1. `python3 AIR/air.py layers`：建立各層的目錄（各層的規則在 `AIR/rules/`，第一次讀寫該層時 hook 會附上）。
 2. `python3 AIR/air.py check`：此時各層只有 `__init__.py` 與 contracts 的樣板，應該通過。
 3. `python3 AIR/air.py phase layered`（會確認層目錄都存在、檢查通過），然後 commit：`AIR：建立分層`。
 

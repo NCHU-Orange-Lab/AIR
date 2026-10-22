@@ -7,10 +7,9 @@ MANIFEST 由 AIR 的開發 repo 產生（python3 AIR/air.py manifest），列出
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
-from . import install
+from . import hosts, install
 from .config import KIT_DIR
 
 MANIFEST = "MANIFEST.sha256"
@@ -70,20 +69,26 @@ def manifest_problems(kit: Path = KIT_DIR) -> list[tuple[Path, str]]:
 
 
 def wiring_problems(root: Path) -> list[tuple[Path, str]]:
-    """接點是否還在。只在這台電腦跑過 install.sh（有 .air/python）時檢查，CI 的乾淨 checkout 不會誤報。"""
-    if not (root / ".air" / "python").exists():
+    """接點是否還在。只在這台電腦跑過 install.sh（有 .air/hosts）時檢查，CI 的乾淨 checkout 不會誤報。
+
+    install.sh 裝了哪些宿主就查哪些：設定檔要在、AIR 的 hook 要齊全。沒裝的宿主（例如只用 Claude Code）不算問題。
+    """
+    installed = install.installed_hosts(root)
+    if installed is None:
         return []
     problems = []
-    settings = root / ".claude" / "settings.json"
-    try:
-        data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
-    except ValueError:
-        data = {}
-    found = {(event, h["command"].rsplit("/", 1)[-1]) for event, entries in data.get("hooks", {}).items()
-             for entry in entries for h in entry.get("hooks", []) if install.is_air_hook(h)}
-    missing = [f"{event}/{script}" for event, _, script, _ in install.HOOKS if (event, script) not in found]
-    if missing:
-        problems.append((settings, f"缺少 AIR 的 hook：{'、'.join(missing)}"))
+    for host in installed:
+        path = root / host.hooks_file
+        if not path.exists():
+            problems.append((path, f"{host.label} 的 hook 設定不見了"))
+            continue
+        try:
+            data = install.read_hooks(path)
+        except ValueError:
+            data = {}
+        missing = install.missing_hooks(data, host)
+        if missing:
+            problems.append((path, f"缺少 AIR 的 hook：{'、'.join(missing)}"))
     for path in (install.claude_md_path(root), root / "AGENTS.md"):
         if not path.exists() or install.BEGIN not in path.read_text(encoding="utf-8"):
             problems.append((path, "缺少 AIR 的指引區塊"))

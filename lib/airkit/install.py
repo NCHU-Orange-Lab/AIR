@@ -1,12 +1,12 @@
 """安裝與移除。可以重複執行；只動 AIR 自己建立或標記的內容。
 
 建立的接點：
-  CLAUDE.md、AGENTS.md          加入一個標記區塊
-  .claude/settings.json          加入四個 hook（編輯前、編輯後、執行 Bash 前、結束前）
-  .claude/skills/air-*/          從 AIR/skills 複製（含 .air-managed 標記）
+  CLAUDE.md                      標記區塊：AIR 自己建立的 CLAUDE.md 匯入 AGENTS.md；使用者原有的 CLAUDE.md 匯入 AIR/AGENTS.md
+  AGENTS.md                      標記區塊：AIR/AGENTS.md 的全文（Codex 等工具只讀本文，不處理 @ 匯入）
+  每個宿主的 hook 設定與 skills    Claude Code：.claude/settings.json、.claude/skills/；Codex：.codex/hooks.json、.agents/skills/（見 hosts.py）
   commit 前檢查                  .pre-commit-config.yaml 加區塊，或 .git/hooks/pre-commit
   .air/project.toml、.air/python 專案設定（移除時保留，除非 --purge）
-  各層與 tests 的 CLAUDE.md      從 AIR/rules 複製（含標記）
+舊版放在各層目錄的 CLAUDE.md 會被移除：各層規則改由 hook 在第一次讀寫該層時注入（見 context.py）。
 """
 
 from __future__ import annotations
@@ -20,20 +20,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import hosts
 from .config import KIT_DIR, PROJECT_FILE, Config, ConfigError
 
 BEGIN, END = "AIR:BEGIN", "AIR:END"
 MANAGED = "AIR:MANAGED"
 SKILL_MARK = ".air-managed"
 FAILED = "失敗："  # 安裝結果中失敗項目的前綴（air.py 用它判斷安裝是否完成）
-# (事件, matcher, 腳本, timeout 秒)
-HOOKS = [
-    ("PreToolUse", "Bash", "pre_bash.sh", 30),
-    ("PreToolUse", "Edit|Write|MultiEdit", "pre_edit.sh", 30),
-    ("PostToolUse", "Edit|Write|MultiEdit", "post_edit.sh", 60),
-    ("Stop", None, "stop.sh", 120),
-]
-RULE_HEADER = f"<!-- {MANAGED} 這個檔案由 AIR 產生，更新 AIR 時會覆蓋。要修改規則，請改 AIR 的開發 repo。 -->\n"
 SKIP_DIRS = {"tests", "test", "docs", "scripts", "AIR", ".air", "build", "dist", "examples", "venv", ".venv"}
 
 
@@ -129,7 +122,7 @@ def preflight(root: Path) -> list[str]:
     return warnings
 
 
-# ── 各個接點 ──
+# ── 專案設定 ──
 
 def write_project_file(root: Path, package: str, package_dir: str) -> str:
     path = root / PROJECT_FILE
@@ -141,25 +134,50 @@ def write_project_file(root: Path, package: str, package_dir: str) -> str:
     return "created"
 
 
-AIR_IGNORE = ["python", "verify.json"]  # 這台電腦的 Python 路徑、本機的驗收紀錄：都不進版本控制
+AIR_IGNORE = ["python", "hosts", "verify.json", "sessions"]  # 這台電腦的 Python 路徑與裝了哪些宿主、本機的驗收紀錄、hook 的注入紀錄：都不進版本控制
+HOSTS_FILE = Path(".air") / "hosts"
 
 
-def write_python_file(root: Path) -> None:
-    """記下這台電腦上可用的 Python 3.11+。路徑因機器而異，所以不進版本控制。"""
+def write_local_state(root: Path, selected: list[hosts.Host]) -> None:
+    """記下這台電腦上可用的 Python 3.11+，以及這次裝了哪些宿主的接點。兩者因機器而異，所以不進版本控制。"""
     air = root / ".air"
     (air / "python").write_text(sys.executable + "\n", encoding="utf-8")
+    (root / HOSTS_FILE).write_text("".join(f"{h.name}\n" for h in selected), encoding="utf-8")
     ignore = air / ".gitignore"
     existing = ignore.read_text(encoding="utf-8").splitlines() if ignore.exists() else []
     missing = [name for name in AIR_IGNORE if name not in existing]
     if missing:
-        header = [] if existing else ["# 由 AIR/install.sh 產生：這台電腦的 Python 路徑、本機的驗收紀錄"]
+        header = [] if existing else ["# 由 AIR/install.sh 產生：這台電腦的 Python 路徑與宿主、本機的驗收紀錄、hook 的注入紀錄"]
         ignore.write_text("\n".join(existing + header + missing) + "\n", encoding="utf-8")
 
+
+def installed_hosts(root: Path) -> list[hosts.Host] | None:
+    """這台電腦上 install.sh 裝了哪些宿主；沒跑過 install.sh（或是 2.2 以前裝的）回傳 None。"""
+    path = root / HOSTS_FILE
+    if not path.exists():
+        return None
+    names = path.read_text(encoding="utf-8").split()
+    return [hosts.HOSTS[n] for n in names if n in hosts.HOSTS]
+
+
+# ── 指引：CLAUDE.md、AGENTS.md ──
 
 def claude_md_path(root: Path) -> Path:
     if not (root / "CLAUDE.md").exists() and (root / ".claude" / "CLAUDE.md").exists():
         return root / ".claude" / "CLAUDE.md"
     return root / "CLAUDE.md"
+
+
+def _owned(path: Path) -> bool:
+    """這個檔案是 AIR 建立的：不存在，或除了 AIR 的區塊沒有別的內容。"""
+    if not path.exists():
+        return True
+    return not _block_re(f"<!-- {BEGIN}", f"<!-- {END}").sub("", path.read_text(encoding="utf-8")).strip()
+
+
+def agents_body() -> str:
+    """AGENTS.md 區塊的內容：AIR/AGENTS.md 的全文。規則只有一個來源，安裝時複製過去，所以 Codex 這類不處理 @ 匯入的工具也讀得到。"""
+    return (KIT_DIR / "AGENTS.md").read_text(encoding="utf-8").strip()
 
 
 def ensure_instructions(root: Path) -> list[str]:
@@ -168,138 +186,168 @@ def ensure_instructions(root: Path) -> list[str]:
     def rel(target: Path) -> str:  # @ 匯入相對於「包含它的檔案」解析：.claude/CLAUDE.md 要寫 ../
         return os.path.relpath(target, claude.parent).replace(os.sep, "/")
 
-    imports = [f"@{rel(root / 'AIR' / 'AGENTS.md')}"]
-    # 新建 CLAUDE.md 後，Claude Code 就不會再讀 AGENTS.md，所以要一併匯入
-    if not claude.exists() and (root / "AGENTS.md").exists():
-        imports.insert(0, f"@{rel(root / 'AGENTS.md')}")
-    out = [f"{claude.relative_to(root)}：{ensure_block(claude, md_block(chr(10).join(imports)), BEGIN)}"]
-    pointer = "本專案採用 AIR 規範。開始任何工作之前，先讀 `AIR/AGENTS.md`。"
-    out.append(f"AGENTS.md：{ensure_block(root / 'AGENTS.md', md_block(pointer), BEGIN)}")
+    # AIR 自己建立的 CLAUDE.md 只匯入 AGENTS.md（常駐規則全文在那裡，使用者原有的 AGENTS.md 內容也一起讀到）。
+    # 使用者自己的 CLAUDE.md 匯入 AIR/AGENTS.md：有了 CLAUDE.md 之後 Claude Code 不會再讀 AGENTS.md，不會讀到兩份。
+    target = root / "AGENTS.md" if _owned(claude) else root / "AIR" / "AGENTS.md"
+    out = [f"{claude.relative_to(root)}：{ensure_block(claude, md_block('@' + rel(target)), BEGIN)}"]
+    out.append(f"AGENTS.md：{ensure_block(root / 'AGENTS.md', md_block(agents_body()), BEGIN)}")
+    if (root / "AGENTS.override.md").exists():
+        out.append("注意：根目錄有 AGENTS.override.md，Codex 只讀它、不讀 AGENTS.md。請把 AGENTS.md 的 AIR 區塊搬進去，或移除 override")
     return out
 
 
-def hook_command(script: str) -> str:
-    # 明確用 sh 執行：fresh checkout 的腳本沒有執行位元也能啟動
-    return f'sh "$CLAUDE_PROJECT_DIR"/AIR/hooks/{script}'
+# ── hook 設定（每個宿主一個檔案，結構相同：hooks.<事件>[].hooks[]）──
 
-
-def _legacy_hook_command(script: str) -> str:
-    return f'"$CLAUDE_PROJECT_DIR"/AIR/hooks/{script}'  # 2.0.0 的寫法，重新安裝時換成新的
+def read_hooks(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    data = json.loads(text) if text.strip() else {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} 的最外層不是物件")
+    return data
 
 
 def is_air_hook(hook: dict) -> bool:
-    """只認 AIR 自己產生的指令（完全相同），不用子字串比對，才不會誤認使用者的 hook。"""
-    command = hook.get("command", "")
-    return hook.get("type") == "command" and any(
-        command in (hook_command(script), _legacy_hook_command(script)) for _, _, script, _ in HOOKS
-    )
+    """只認 AIR 自己產生過的指令（完全相同，含舊版格式），不用子字串比對，才不會誤認使用者的 hook。"""
+    return isinstance(hook, dict) and hook.get("type") == "command" and hook.get("command", "") in hosts.air_commands()
+
+
+def air_hooks(data: dict) -> list[tuple[str, str, str]]:
+    """設定裡 AIR 的項目：(事件, 指令, 腳本)。"""
+    known = hosts.air_commands()
+    return [(event, h["command"], known[h["command"]][1]) for event, entries in data.get("hooks", {}).items()
+            for entry in entries for h in entry.get("hooks", []) if is_air_hook(h)]
+
+
+def missing_hooks(data: dict, host: hosts.Host) -> list[str]:
+    """這個宿主應該有、設定裡卻沒有的 hook（不計較指令是哪一版的寫法）。"""
+    found = {(event, script) for event, _, script in air_hooks(data)}
+    return [f"{event}/{script}" for event, _, script, _ in host.hooks() if (event, script) not in found]
+
+
+def stale_hooks(data: dict, host: hosts.Host) -> list[str]:
+    """指令不是這個宿主目前的寫法（舊格式、別的宿主的格式）：重新安裝會換掉。"""
+    current = {hosts.hook_command(host, script) for script in host.scripts}
+    return sorted({script for _, command, script in air_hooks(data) if command not in current})
 
 
 def _strip_air_hooks(data: dict) -> None:
-    hooks = data.get("hooks", {})
-    for event in list(hooks):
+    table = data.get("hooks", {})
+    for event in list(table):
         kept = []
-        for entry in hooks[event]:
+        for entry in table[event]:
             entry["hooks"] = [h for h in entry.get("hooks", []) if not is_air_hook(h)]
             if entry["hooks"]:
                 kept.append(entry)
         if kept:
-            hooks[event] = kept
+            table[event] = kept
         else:
-            del hooks[event]
-    if not hooks:
+            del table[event]
+    if not table:
         data.pop("hooks", None)
 
 
-def _read_settings(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    return json.loads(text) if text.strip() else {}
-
-
-def ensure_settings(root: Path) -> str:
-    """先移除 AIR 的 hook（含舊格式）再重新加入，所以 matcher 與 timeout 一定是目前的版本。"""
-    path = root / ".claude" / "settings.json"
-    original = _read_settings(path)
-    data = copy.deepcopy(original)
-    _strip_air_hooks(data)
-    hooks = data.setdefault("hooks", {})
-    for event, matcher, script, timeout in HOOKS:
-        entry = {"hooks": [{"type": "command", "command": hook_command(script), "timeout": timeout}]}
-        if matcher:
-            entry = {"matcher": matcher, **entry}
-        hooks.setdefault(event, []).append(entry)
-    if data == original:
-        return "unchanged"
+def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def ensure_hooks(root: Path, host: hosts.Host) -> str:
+    """先移除 AIR 的項目（含舊格式）再重新加入，所以 matcher、timeout 與指令一定是目前的版本。"""
+    path = root / host.hooks_file
+    original = read_hooks(path)
+    data = copy.deepcopy(original)
+    _strip_air_hooks(data)
+    if host.description and "description" not in data:
+        data = {"description": host.description, **data}
+    table = data.setdefault("hooks", {})
+    for event, matcher, script, timeout in host.hooks():
+        entry = {"hooks": [{"type": "command", "command": hosts.hook_command(host, script), "timeout": timeout}]}
+        if matcher:
+            entry = {"matcher": matcher, **entry}
+        table.setdefault(event, []).append(entry)
+    if data == original:
+        return "unchanged"
+    _write_json(path, data)
     return "updated"
 
 
-def remove_settings(root: Path) -> bool:
-    path = root / ".claude" / "settings.json"
+def _prune_empty_dirs(path: Path, root: Path) -> None:
+    """移除空掉的目錄（例如 .agents/skills、.agents），到專案根目錄為止。"""
+    while path != root and path.is_dir() and not any(path.iterdir()):
+        path.rmdir()
+        path = path.parent
+
+
+def remove_hooks(root: Path, host: hosts.Host) -> bool:
+    path = root / host.hooks_file
     if not path.exists():
         return False
-    original = _read_settings(path)
+    original = read_hooks(path)
     data = copy.deepcopy(original)
     _strip_air_hooks(data)
+    if "hooks" not in data and data.get("description") == host.description:
+        data.pop("description")  # 整個檔案是 AIR 建立的
     if data == original:
         return False
     if data:
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        _write_json(path, data)
     else:
         path.unlink()
+        _prune_empty_dirs(path.parent, root)
     return True
 
 
-def ensure_skills(root: Path) -> list[str]:
-    out = []
-    for src in sorted((KIT_DIR / "skills").iterdir()):
-        dest = root / ".claude" / "skills" / src.name
+# ── skills ──
+
+def skill_names() -> list[str]:
+    return sorted(d.name for d in (KIT_DIR / "skills").iterdir() if d.is_dir())
+
+
+def _listing(base: Path) -> dict[str, bytes]:
+    return {p.relative_to(base).as_posix(): p.read_bytes()
+            for p in base.rglob("*") if p.is_file() and p.name != SKILL_MARK and "__pycache__" not in p.parts}
+
+
+def skill_differs(src: Path, dest: Path) -> bool:
+    """安裝的 skill 跟套件裡的不一樣（更新 AIR 後還沒重新安裝）。"""
+    return _listing(src) != _listing(dest)
+
+
+def ensure_skills(root: Path, host: hosts.Host) -> tuple[list[str], list[str]]:
+    """回傳 (安裝的 skill, 略過的說明)。"""
+    installed, skipped = [], []
+    for name in skill_names():
+        src, dest = KIT_DIR / "skills" / name, root / host.skills_dir / name
         if dest.exists() and not (dest / SKILL_MARK).exists():
-            out.append(f"略過 {dest.relative_to(root)}：已經存在，而且不是 AIR 建立的")
+            skipped.append(f"略過 {dest.relative_to(root)}：已經存在，而且不是 AIR 建立的")
             continue
         if dest.exists():
             shutil.rmtree(dest)
-        shutil.copytree(src, dest)
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__"))
         (dest / SKILL_MARK).write_text("這個 skill 由 AIR 複製，更新 AIR 時會覆蓋。\n", encoding="utf-8")
-        out.append(str(dest.relative_to(root)))
-    return out
+        installed.append(name)
+    return installed, skipped
 
 
-def remove_skills(root: Path) -> list[str]:
-    base = root / ".claude" / "skills"
+def remove_skills(root: Path, host: hosts.Host) -> list[str]:
+    base = root / host.skills_dir
     removed = []
     for d in sorted(base.iterdir()) if base.is_dir() else []:
         if (d / SKILL_MARK).exists():
             shutil.rmtree(d)
-            removed.append(d.name)
+            removed.append(str(d.relative_to(root)))
+    _prune_empty_dirs(base, root)
     return removed
 
 
-def refresh_rules(cfg: Config) -> list[str]:
-    """把 AIR/rules 複製成各層（與 tests）的 CLAUDE.md；只處理已經存在的目錄。"""
-    targets = [(la.path, la.name) for la in cfg.layers.values()] + [(cfg.tests_dir, "tests")]
-    out = []
-    for directory, name in targets:
-        src = KIT_DIR / "rules" / f"{name}.md"
-        dest = directory / "CLAUDE.md"
-        if not directory.is_dir() or not src.exists():
-            continue
-        if dest.exists() and MANAGED not in dest.read_text(encoding="utf-8").split("\n", 1)[0]:
-            out.append(f"略過 {dest.relative_to(cfg.root)}：已經存在，而且不是 AIR 建立的")
-            continue
-        content = RULE_HEADER + src.read_text(encoding="utf-8")
-        if not dest.exists() or dest.read_text(encoding="utf-8") != content:
-            dest.write_text(content, encoding="utf-8")
-        out.append(str(dest.relative_to(cfg.root)))
-    return out
-
+# ── 舊版的規則檔 ──
 
 def remove_rules(cfg: Config) -> list[str]:
+    """移除 2.2 以前放在各層與 tests 目錄的 CLAUDE.md（只動有 AIR:MANAGED 標記的）。"""
     removed = []
     for directory in [la.path for la in cfg.layers.values()] + [cfg.tests_dir]:
         dest = directory / "CLAUDE.md"
-        if dest.exists() and MANAGED in dest.read_text(encoding="utf-8").split("\n", 1)[0]:
+        if dest.exists() and MANAGED in dest.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0]:
             dest.unlink()
             removed.append(str(dest.relative_to(cfg.root)))
     return removed
@@ -348,7 +396,7 @@ def ensure_commit_check(root: Path) -> str:
 
 
 def commit_check_status(root: Path) -> str:
-    """給 status 看：commit 前檢查裝在哪裡。"""
+    """給 status、doctor 看：commit 前檢查裝在哪裡。"""
     config = root / ".pre-commit-config.yaml"
     if config.exists() and BEGIN in config.read_text(encoding="utf-8", errors="replace"):
         return "pre-commit（.pre-commit-config.yaml）"
@@ -375,9 +423,15 @@ def remove_commit_check(root: Path) -> str:
 
 # ── 對外 ──
 
-def install(root: Path, package: str | None, package_dir: str | None) -> list[str]:
+def _skill_lines(root: Path, host: hosts.Host) -> list[str]:
+    installed, skipped = ensure_skills(root, host)
+    return ([f"{host.skills_dir}/：{'、'.join(installed)}"] if installed else []) + skipped
+
+
+def install(root: Path, package: str | None, package_dir: str | None, host_names: list[str] | None = None) -> list[str]:
     from .config import load
 
+    selected = [hosts.HOSTS[name] for name in (host_names or list(hosts.HOSTS))]
     lines = [f"注意：{w}" for w in preflight(root)]
     if not (root / PROJECT_FILE).exists():
         if not package:
@@ -387,15 +441,18 @@ def install(root: Path, package: str | None, package_dir: str | None) -> list[st
                 raise InstallError(f"無法確定套件。候選：{shown}。請用 --package 與 --package-dir 指定。")
             package, package_dir = candidates[0]
         package_dir = package_dir or package
-    # 每個接點分開做：一個失敗（沙箱擋下寫入、settings.json 壞掉）不影響其他接點，最後列出失敗的項目。重跑是安全的。
+    # 每個接點分開做：一個失敗（沙箱擋下寫入、設定檔壞掉）不影響其他接點，最後列出失敗的項目。重跑是安全的。
     steps = [
         (".air/project.toml", lambda: [f".air/project.toml：{write_project_file(root, package or '', package_dir or '')}"]),
-        (".air/python", lambda: write_python_file(root) or []),
+        (".air/python、.air/hosts", lambda: write_local_state(root, selected) or []),
         ("CLAUDE.md、AGENTS.md", lambda: ensure_instructions(root)),
-        (".claude/settings.json", lambda: [f".claude/settings.json：{ensure_settings(root)}"]),
-        ("skills", lambda: [f"skill：{s}" for s in ensure_skills(root)]),
+    ]
+    for host in selected:
+        steps.append((str(host.hooks_file), lambda h=host: [f"{h.hooks_file}：{ensure_hooks(root, h)}"] + ([f"注意：{h.note}"] if h.note else [])))
+        steps.append((str(host.skills_dir), lambda h=host: _skill_lines(root, h)))
+    steps += [
         ("commit 前檢查", lambda: [ensure_commit_check(root)] if git_toplevel(root) else []),
-        ("各層規則", lambda: [f"規則：{r}" for r in refresh_rules(load(root))]),
+        ("舊版規則檔", lambda: [f"移除 {r}（舊版的規則檔；規則改由 hook 注入）" for r in remove_rules(load(root))]),
     ]
     for label, run in steps:
         try:
@@ -406,7 +463,7 @@ def install(root: Path, package: str | None, package_dir: str | None) -> list[st
 
 
 def uninstall(root: Path, purge: bool) -> list[str]:
-    from .config import ConfigError, load
+    from .config import load
 
     lines = []
     try:
@@ -416,12 +473,14 @@ def uninstall(root: Path, purge: bool) -> list[str]:
     for path in (claude_md_path(root), root / "AGENTS.md"):
         if remove_block(path, f"<!-- {BEGIN}", f"<!-- {END}"):
             lines.append(f"移除 {path.relative_to(root)} 的區塊")
-    if remove_settings(root):
-        lines.append("移除 .claude/settings.json 的 hook")
-    lines += [f"移除 skill {s}" for s in remove_skills(root)]
+    for host in hosts.HOSTS.values():
+        if remove_hooks(root, host):
+            lines.append(f"移除 {host.hooks_file} 的 hook")
+        lines += [f"移除 skill {s}" for s in remove_skills(root, host)]
     removed = remove_commit_check(root)
     if removed:
         lines.append(f"移除 {removed} 的 commit 前檢查")
+    (root / HOSTS_FILE).unlink(missing_ok=True)  # 接點都拿掉了，完整性檢查不該再要求它們存在
     if purge and (root / ".air").exists():
         shutil.rmtree(root / ".air")
         lines.append("刪除 .air/")

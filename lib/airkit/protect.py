@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import PROJECT_FILE, REPORT_FILE, Config
-from .install import MANAGED, SKILL_MARK
+from .hosts import HOSTS
+from .install import SKILL_MARK
 
 DENY, ASK, ALLOW = "deny", "ask", "allow"
 # 還在做分析（installed）或計畫（analyzed）時，不能改程式
@@ -23,12 +24,13 @@ class Decision:
     reason: str = ""
 
 
-def _managed(path: Path) -> bool:
-    """AIR 產生的規則檔：第一行有 AIR:MANAGED。"""
-    try:
-        return MANAGED in path.read_text(encoding="utf-8").split("\n", 1)[0]
-    except (OSError, UnicodeDecodeError):
-        return False
+def _managed_skill(parts: tuple[str, ...], root: Path) -> bool:
+    """任一宿主的 skills 目錄底下、有 .air-managed 標記的 skill。"""
+    for host in HOSTS.values():
+        n = len(host.skills_dir.parts)
+        if len(parts) > n and parts[:n] == host.skills_dir.parts and (root.joinpath(*parts[:n + 1]) / SKILL_MARK).exists():
+            return True
+    return False
 
 
 def classify(path: Path, cfg: Config) -> Decision:
@@ -42,18 +44,17 @@ def classify(path: Path, cfg: Config) -> Decision:
         return Decision(ALLOW)
     if parts[0] == "AIR":
         return Decision(DENY, "AIR/ 是套件，專案裡不修改（更新時會整包換掉）。要調整規範，照 skill air-maintain-rules 在 AIR 的開發 repo 改。")
-    if name == ".claude/settings.json":
-        return Decision(DENY, "這裡放著 AIR 的 hook。要停用 AIR，請使用者執行 sh AIR/uninstall.sh；不要自己拿掉 hook。")
+    for host in HOSTS.values():
+        if name == host.hooks_file.as_posix():
+            return Decision(DENY, f"這裡放著 AIR 的 hook（{host.label}）。要停用 AIR，請使用者執行 sh AIR/uninstall.sh；不要自己拿掉 hook。")
     if parts[0] == ".git":
         return Decision(DENY, "不能修改 .git 裡的內容（含 hooks）。")
     if name == PROJECT_FILE.as_posix():
         return Decision(ASK, "修改 .air/project.toml（imports.extra、allow-legacy、遷移階段）需要使用者同意。")
     if parts[0] == ".air":
         return Decision(DENY, ".air/ 裡的其他檔案（紀錄、Python 路徑）由 AIR 的指令寫入，不要手動修改。")
-    if rel.name == "CLAUDE.md" and _managed(path):
-        return Decision(DENY, "這份 CLAUDE.md 是 AIR 產生的規則檔，更新 AIR 時會覆蓋。規則請在 AIR 的開發 repo 改。")
-    if len(parts) >= 3 and parts[:2] == (".claude", "skills") and (cfg.root / parts[0] / parts[1] / parts[2] / SKILL_MARK).exists():
-        return Decision(DENY, "這個 skill 由 AIR 複製，更新 AIR 時會覆蓋。")
+    if _managed_skill(parts, cfg.root):
+        return Decision(DENY, "這個 skill 由 AIR 複製，更新 AIR 時會覆蓋。要修改請在 AIR 的開發 repo 改。")
     stage = READ_ONLY_PHASES.get(cfg.phase)
     if stage and rel.suffix == ".py":
         return Decision(DENY, f"目前在{stage}階段（phase = {cfg.phase}），不能修改程式。先完成遷移報告 {REPORT_FILE.as_posix()}，等使用者核准進入下一階段。")

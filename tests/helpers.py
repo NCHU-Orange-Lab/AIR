@@ -119,6 +119,11 @@ class Project:
             env={**os.environ, **(env or {})},
         )
 
+    def hook(self, event: str, payload: dict | str, host: str | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
+        """執行 air.py hook <event>，payload 可以是 dict（會轉成 JSON）或原始字串。"""
+        args = ["hook", event] + (["--host", host] if host else [])
+        return self.air(*args, stdin=payload if isinstance(payload, str) else json.dumps(payload), cwd=cwd)
+
     def sh(self, command: str, stdin: str = "", env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
             command, shell=True, cwd=cwd or self.root, input=stdin, capture_output=True, text=True, encoding="utf-8",

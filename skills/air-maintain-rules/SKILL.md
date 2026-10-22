@@ -14,7 +14,7 @@ description: 想新增、修改、放寬 AIR 規範時使用，包括白名單�
 | 測試指令、套件位置 | `.air/project.toml` 的 `project` | 使用者確認後才改 |
 | 規則本身（各層規則、禁用清單、檢查邏輯、skills） | **不要在這個專案裡改 `AIR/`** | 回到 AIR-dev 開發 repo 修改，再更新到各個專案 |
 
-`AIR/` 是外部帶進來的套件，更新時會被整包換掉，在專案裡的修改都會遺失。專案裡由 AIR 產生的檔案（各層的 `CLAUDE.md`、`.claude/skills/air-*`）也一樣，不要手動修改。這些路徑用編輯工具改會被 hook 擋下；用其他方式改了，結束前與 commit 前會回報 AIR009。
+`AIR/` 是外部帶進來的套件，更新時會被整包換掉，在專案裡的修改都會遺失。專案裡由 AIR 複製的 skill（`.claude/skills/air-*`、`.agents/skills/air-*`）也一樣，不要手動修改。這些路徑用編輯工具改會被 hook 擋下；用其他方式改了，結束前與 commit 前會回報 AIR009。
 
 ## 修改 .air/project.toml 時
 

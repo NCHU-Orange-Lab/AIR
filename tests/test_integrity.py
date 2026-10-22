@@ -21,6 +21,7 @@ class TestRepoManifest(unittest.TestCase):
         self.assertIn("config.toml", names)
         self.assertIn("lib/airkit/checks.py", names)
         self.assertIn("hooks/pre_edit.sh", names)
+        self.assertIn("hooks/session_start.sh", names)
 
 
 class TestManifest(ProjectTestCase):
@@ -119,6 +120,7 @@ class TestWiring(ProjectTestCase):
         self.p.layer("steps", ok="x = 1\n")
         self.assertEqual(self.p.air("install").returncode, 0)
         self.settings = self.p.root / ".claude" / "settings.json"
+        self.codex = self.p.root / ".codex" / "hooks.json"
 
     def test_intact_wiring_passes(self):
         r = self.p.air("check")
@@ -133,9 +135,34 @@ class TestWiring(ProjectTestCase):
         self.assertIn("缺少 AIR 的 hook", r.stdout)
         self.assertIn("PostToolUse/post_edit.sh", r.stdout)
 
-    def test_deleted_settings_is_air009(self):
+    def test_removed_codex_hook_is_air009(self):
+        data = json.loads(self.codex.read_text(encoding="utf-8"))
+        del data["hooks"]["Stop"]
+        self.codex.write_text(json.dumps(data), encoding="utf-8")
+        r = self.p.air("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(".codex/hooks.json", r.stdout)
+        self.assertIn("Stop/stop.sh", r.stdout)
+
+    def test_deleted_settings_is_air009_even_though_codex_file_remains(self):
         self.settings.unlink()
-        self.assertIn("AIR009", self.p.air("check").stdout)
+        r = self.p.air("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Claude Code 的 hook 設定不見了", r.stdout)
+
+    def test_host_that_was_not_installed_is_not_required(self):
+        self.p.air("uninstall")
+        self.assertEqual(self.p.air("install", "--host", "claude").returncode, 0)
+        self.assertFalse(self.codex.exists())
+        self.assertEqual(self.p.air("check").returncode, 0)
+        self.settings.unlink()
+        self.assertEqual(self.p.air("check").returncode, 1)
+
+    def test_legacy_hook_form_still_counts_as_present(self):
+        data = json.loads(self.settings.read_text(encoding="utf-8"))
+        data["hooks"]["Stop"][0]["hooks"][0]["command"] = '"$CLAUDE_PROJECT_DIR"/AIR/hooks/stop.sh'
+        self.settings.write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual(self.p.air("check").returncode, 0)
 
     def test_removed_instruction_block_is_air009(self):
         (self.p.root / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
@@ -145,8 +172,14 @@ class TestWiring(ProjectTestCase):
 
     def test_wiring_not_checked_on_a_clean_checkout(self):
         # 沒跑過 install.sh 的 clone（例如 CI）不該因為 hook 不在就報錯
+        (self.p.root / ".air" / "hosts").unlink()
         (self.p.root / ".air" / "python").unlink()
         self.settings.unlink()
+        self.codex.unlink()
+        self.assertEqual(self.p.air("check").returncode, 0)
+
+    def test_wiring_not_checked_after_uninstall(self):
+        self.p.air("uninstall")
         self.assertEqual(self.p.air("check").returncode, 0)
 
     def test_status_commit_check_line(self):

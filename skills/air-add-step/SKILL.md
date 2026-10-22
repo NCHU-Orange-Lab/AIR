@@ -7,7 +7,7 @@ description: 在 steps 層新增或修改資料處理步驟，或把步驟串進
 
 ## 開始前
 
-改到哪一層，就讀哪一層的 `CLAUDE.md`：一定會改 steps；串進流程時改 flows；需要新資料時改 storage；需要新的跨層型別時改 contracts。各層的位置在 `.air/project.toml` 的 package-dir 底下。
+改到哪一層，就照哪一層的規則（`AIR/rules/<層>.md`，第一次讀寫時 hook 會附上）：一定會改 steps；串進流程時改 flows；需要新資料時改 storage；需要新的跨層型別時改 contracts。各層的位置在 `.air/project.toml` 的 package-dir 底下。
 
 ## 步驟
 
