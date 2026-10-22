@@ -12,7 +12,7 @@
   python3 AIR/air.py uninstall [--purge]
   python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查
   python3 AIR/air.py layers [層 ...]         建立分層目錄（預設全部）
-  python3 AIR/air.py survey                  盤點現有程式碼（Markdown）
+  python3 AIR/air.py survey [--out 檔案]     盤點現有程式碼（Markdown；--out 寫進檔案，畫面只印摘要）
   python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
   python3 AIR/air.py phase <階段> [--rollback|--force] [--reason 原因]
                                              推進遷移階段（一次一格，會檢查前置條件；退回或強制要寫原因）
@@ -42,16 +42,17 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import context, doctor, guard, hooklog, hosts, install, integrity, project, protect, review, verify  # noqa: E402
-from airkit.checks import EXIT, check, rel  # noqa: E402
+from airkit import context, doctor, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
+from airkit.checks import EXIT, check, format_grouped, grouped, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
 FIX_HINT = "依訊息中的規則編號讀對應層的規則（AIR/rules/<層>.md；前綴對照見 AIR/AGENTS.md）後修正。"
+STOP_GROUPS = 10  # 結束前的檢查最多印幾組違規（同一種違規算一組）；其餘寫進 .air/last-check.json
 
 
 def print_report(report, root: Path, show_soft: bool = True) -> None:
-    for v in report.hard:
-        print(v.format(root))
+    for line in format_grouped(report.hard, root):  # 同一種違規只印一次修法
+        print(line)
     if show_soft and report.soft:
         print("── 僅供參考（不影響結果）")
         for v in report.soft:
@@ -81,7 +82,10 @@ def cmd_review(args) -> int:
     cfg = load()
     sc = review.scope(cfg, args.base)
     if args.result is None:
-        print(json.dumps(sc, ensure_ascii=False, indent=2) if args.json else review.format_scope(sc))
+        text = json.dumps(sc, ensure_ascii=False, indent=2) if args.json else review.format_scope(sc)
+        print(text)
+        usage.record(cfg.root, "review-scope", chars=len(text), files=sum(1 for f in sc["files"] if not f["reused"]),
+                     reused=sum(1 for f in sc["files"] if f["reused"]))
         return 0
     text = sys.stdin.read() if args.result == "-" else Path(args.result).read_text(encoding="utf-8")
     try:
@@ -90,6 +94,7 @@ def cmd_review(args) -> int:
         print(f"錯誤：審查結果不是 JSON（{e}）。格式見 skill air-review。", file=sys.stderr)
         return 2
     errors, findings = review.validate(sc, data)
+    usage.record(cfg.root, "review-result", valid=not errors, findings=len(findings))
     if errors:
         print("審查結果無效，沒有記錄：", file=sys.stderr)
         for err in errors:
@@ -134,7 +139,18 @@ def cmd_layers(args) -> int:
 
 
 def cmd_survey(args) -> int:
-    print(project.survey(load()), end="")
+    cfg = load()
+    rows = project.survey_rows(cfg)
+    table = project.survey(cfg, rows)
+    if args.out:
+        out = (cfg.root / args.out).resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(table, encoding="utf-8")
+        text = project.survey_summary(cfg, rows, out)
+    else:
+        text = table
+    print(text, end="")
+    usage.record(cfg.root, "survey", modules=len(rows), chars=len(text), out=args.out)
     return 0
 
 
@@ -222,6 +238,7 @@ def hook_post_edit(event: hosts.Event, cfg: Config) -> int:
         return 0
     report = check(cfg, paths)  # 已刪除的檔案 check() 會略過
     if report.hard:
+        usage.record(cfg.root, "post-edit-blocked", files=len(paths), violations=len(report.hard))
         print("【這次修改已經寫入檔案，但違反規則，必須修正】", file=sys.stderr)
         for v in report.hard:
             print(v.format(cfg.root), file=sys.stderr)
@@ -247,9 +264,14 @@ def hook_stop(event: hosts.Event, cfg: Config) -> int:
     report = check(cfg)
     if not report.hard:
         return 0
+    groups = grouped(report.hard)
+    verify.write_json(cfg.root / ".air" / "last-check.json", report.to_dict(cfg.root))  # 完整清單在檔案裡，畫面只印前 10 組
+    usage.record(cfg.root, "stop-blocked", violations=len(report.hard), groups=len(groups))
     print("結束前的全專案檢查未通過（可能包含用 Bash 修改、編輯時沒被檢查到的檔案）：", file=sys.stderr)
-    for v in report.hard[:40]:
-        print(v.format(cfg.root), file=sys.stderr)
+    for line in format_grouped(report.hard, cfg.root, limit=STOP_GROUPS):
+        print(line, file=sys.stderr)
+    if len(groups) > STOP_GROUPS:
+        print(f"…另有 {len(groups) - STOP_GROUPS} 組（共 {len(report.hard)} 個違規），完整清單在 .air/last-check.json", file=sys.stderr)
     print(f"\n{FIX_HINT}這是最後一次提醒，沒修好的違規會在 commit 時被擋下。", file=sys.stderr)
     return 2
 
@@ -295,7 +317,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("layers")
     p.add_argument("names", nargs="*")
-    sub.add_parser("survey")
+    p = sub.add_parser("survey")
+    p.add_argument("--out", help="把完整的盤點表寫進這個檔案（相對專案根目錄），畫面只印摘要")
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("phase")

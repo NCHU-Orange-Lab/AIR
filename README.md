@@ -67,6 +67,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
 | `.air/sessions/` | hook 的注入紀錄（哪個 session 已附過哪一層的規則） | 否 |
 | `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
+| `.air/last-check.json` | 結束前的檢查有違規時的完整清單（畫面只印前 10 組） | 否 |
+| `.air/metrics.jsonl` | 成本的代理指標：verify 幾次、審查範圍印了多少字、擋下幾次；`status` 顯示累計 | 否 |
 | `.air/verify.json` | 最近一次 `verify` 的結果，綁定當時的程式碼 | 否 |
 | `.air/review.json` | 最近一次語意審查的結果，綁定當時的變更 | 否 |
 | `docs/AIR-遷移報告.md` | AI 寫的分析、計畫與進度 | 是 |
@@ -87,12 +89,12 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 指令 | 做什麼 |
 |---|---|
-| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、檢查範圍、違規數、hook 錯誤、最近驗收 |
+| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查 |
 | `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查 |
-| `python3 AIR/air.py check` | 快速檢查所有層（加 `--json` 得到機器可讀的結果） |
+| `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
 | `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查，結果記在 `.air/verify.json`（會跑整套測試） |
-| `python3 AIR/air.py review` | 語意審查的範圍：這次變更改到的層內檔案、要對照哪些沒有程式檢查的規則（`--result` 交回結果） |
-| `python3 AIR/air.py survey` | 盤點現有程式碼 |
+| `python3 AIR/air.py review` | 語意審查的範圍：每層要對照的規則（只列一次）與這次改到的檔案；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
+| `python3 AIR/air.py survey --out docs/air-survey.md` | 盤點現有程式碼：完整表寫進檔案，畫面只印摘要 |
 
 ## 更多說明
 

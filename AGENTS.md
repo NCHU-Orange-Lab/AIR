@@ -36,7 +36,7 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 
 ## 遷移中
 
-`.air/project.toml` 的 `migration.phase` 不是 `done` 時，專案正在遷移。做遷移相關的工作時，照 `AIR/START.md` 進行（有 skill 的工具：`air-migrate`），一次只做一個階段，做完就停下來等使用者核准。
+`.air/project.toml` 的 `migration.phase` 不是 `done` 時，專案正在遷移。做遷移相關的工作時，照 `AIR/START.md` 進行（有 skill 的工具：`air-migrate`；有 hook 的工具在 session 開始時會附上當下階段的那一節，不用整份讀），一次只做一個階段，做完就停下來等使用者核准。
 
 ## 指令
 

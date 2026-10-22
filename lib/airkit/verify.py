@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from . import usage
 from .checks import Report, check, rel
 from .config import KIT_DIR, PROJECT_FILE, Config
 
@@ -166,6 +167,9 @@ def verify(cfg: Config, scope: str = "batch") -> dict:
     receipt = {"schema": SCHEMA, "time": now(), "scope": scope, "fingerprint": after,
                "checks": checks, "accepted": not reasons, "reasons": reasons}
     write_receipt(cfg.root, receipt)
+    tests = next((c for c in checks if c["name"] == "project-tests"), {})
+    usage.record(cfg.root, "verify", scope=scope, accepted=receipt["accepted"], checked=len(report.checked),
+                 violations=len(report.hard), ms=tests.get("duration_ms"))
     return receipt
 
 

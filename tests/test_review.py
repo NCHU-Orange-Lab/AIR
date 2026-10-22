@@ -60,30 +60,34 @@ class TestScope(ReviewCase):
         self.p.write("demo/steps/calc.py", STEP_NEW)
         sc = self.scope()
         (f,) = sc["files"]
-        self.assertEqual((f["path"], f["layer"], f["status"], f["changed_lines"]), ("demo/steps/calc.py", "steps", "untracked", None))
-        self.assertEqual([r["id"] for r in f["rules"]], ["STEP-2", "STEP-3", "STEP-4", "STEP-5", "STEP-6"])  # STEP-1 由 check 負責
-        step2 = f["rules"][0]
+        self.assertEqual((f["path"], f["layer"], f["status"], f["changed_lines"], f["reused"]), ("demo/steps/calc.py", "steps", "untracked", None, False))
+        self.assertEqual(len(f["sha"]), 64)
+        self.assertEqual([r["id"] for r in sc["rules"]["steps"]], ["STEP-2", "STEP-3", "STEP-4", "STEP-5", "STEP-6"])  # STEP-1 由 check 負責；規則每層一份
+        step2 = sc["rules"]["steps"][0]
         self.assertEqual((step2["checked"], step2["source"], step2["level"]), ("partial", "AIR/rules/steps.md", "必須"))
         self.assertIn("型別標註", step2["gap"])
         self.assertEqual(sc["schema"], review.SCOPE_SCHEMA)
 
     def test_modified_file_lists_changed_lines(self):
         self.p.write("demo/flows/report.py", FLOW_AFTER)
-        (f,) = self.scope()["files"]
+        sc = self.scope()
+        (f,) = sc["files"]
         self.assertEqual((f["status"], f["changed_lines"]), ("modified", [[3, 4]]))
-        self.assertEqual([r["id"] for r in f["rules"]], ["FLOW-2", "FLOW-3", "FLOW-4"])
+        self.assertEqual([r["id"] for r in sc["rules"]["flows"]], ["FLOW-2", "FLOW-3", "FLOW-4"])
 
     def test_tests_dir_gets_test_rules(self):
         self.p.write("tests/test_calc.py", "def test_x():\n    assert 1\n")
-        (f,) = self.scope()["files"]
-        self.assertEqual((f["layer"], [r["id"] for r in f["rules"]]), ("tests", ["TEST-1", "TEST-2", "TEST-3", "TEST-4", "TEST-5"]))
+        sc = self.scope()
+        (f,) = sc["files"]
+        self.assertEqual((f["layer"], [r["id"] for r in sc["rules"]["tests"]]), ("tests", ["TEST-1", "TEST-2", "TEST-3", "TEST-4", "TEST-5"]))
 
     def test_adapter_subpackage_file_gets_adapter_rules(self):
         self.p.write("demo/adapters/__init__.py", "")
         self.p.write("demo/adapters/torch/__init__.py", "")
         self.p.write("demo/adapters/torch/model.py", "class Net:\n    pass\n")
-        f = next(f for f in self.scope()["files"] if f["path"] == "demo/adapters/torch/model.py")
-        self.assertEqual((f["layer"], [r["id"] for r in f["rules"]]), ("adapters", ["ADP-1", "ADP-2", "ADP-3", "ADP-4", "ADP-5"]))  # ADP-6 由 check 負責
+        sc = self.scope()
+        f = next(f for f in sc["files"] if f["path"] == "demo/adapters/torch/model.py")
+        self.assertEqual((f["layer"], [r["id"] for r in sc["rules"]["adapters"]]), ("adapters", ["ADP-1", "ADP-2", "ADP-3", "ADP-4", "ADP-5"]))  # ADP-6 由 check 負責
 
     def test_out_of_scope_files_are_listed_with_reason(self):
         self.p.write("demo/legacy.py", "x = 1\n")
@@ -109,13 +113,29 @@ class TestScope(ReviewCase):
         self.p.write("demo/flows/report.py", FLOW_AFTER)
         self.p.write("demo/steps/calc.py", STEP_NEW)
         out = self.p.air("review").stdout
-        self.assertIn("demo/flows/report.py（flows，修改；改到的行：3–4）", out)
+        self.assertIn("【flows 的規則】對照底下 1 個檔案", out)
+        self.assertIn("檔案：demo/flows/report.py（修改；改到的行：3–4）", out)
         self.assertIn("FLOW-3【必須】", out)
+        self.assertEqual(out.count("FLOW-3【必須】"), 1)
         self.assertIn("（AIR/rules/flows.md:7）", out)
         self.assertIn("只審程式抓不到的部分：", out)  # STEP-2 的缺口
         self.assertIn(f"git diff --no-renames {self.base[:12]} -- demo/flows/report.py", out)
         self.assertIn("新檔案（整個檔案都在範圍，直接讀）：demo/steps/calc.py", out)
         self.assertIn("review --result -", out)
+
+    def test_rules_are_printed_once_per_layer(self):
+        # 實測一批 12 個模組的範圍輸出有 61% 是重複的規則文字：規則每層只印一次，底下列檔案
+        self.p.write("demo/steps/a.py", STEP_NEW)
+        self.p.write("demo/steps/b.py", STEP_NEW)
+        self.p.write("demo/flows/report.py", FLOW_AFTER)
+        out = self.p.air("review").stdout
+        self.assertEqual(out.count("STEP-2【必須】"), 1)
+        self.assertEqual(out.count("FLOW-3【必須】"), 1)
+        self.assertIn("【steps 的規則】對照底下 2 個檔案", out)
+        self.assertLess(out.index("【steps 的規則】"), out.index("【flows 的規則】"))  # 依 config 裡層的順序
+        sc = self.scope()
+        self.assertEqual(sorted(sc["rules"]), ["flows", "steps"])
+        self.assertTrue(all("rules" not in f for f in sc["files"]))
 
     def test_base_covers_commits_since_merge_base_and_uncommitted(self):
         self.git("branch", "base")
@@ -173,7 +193,7 @@ class TestNotGit(ProjectTestCase):
 
     def test_status_with_record_but_no_git(self):
         self.p.write(".air/review.json", json.dumps({"schema": review.SCHEMA, "time": "2026-01-01T00:00:00", "base": None, "ref": None,
-                                                     "fingerprint": "x", "files": [], "findings": [], "blocking": 0,
+                                                     "files": {}, "findings": [], "blocking": 0,
                                                      "overall": "pass", "explanation": ""}))
         self.assertIn("語意審查：無法判斷", self.p.air("status").stdout)
 
@@ -197,8 +217,9 @@ class TestResult(ReviewCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("通過（0 個發現", r.stdout)
         rec = self.record()
-        self.assertEqual((rec["schema"], rec["blocking"], rec["overall"], rec["files"]),
+        self.assertEqual((rec["schema"], rec["blocking"], rec["overall"], sorted(rec["files"])),
                          (review.SCHEMA, 0, "pass", ["demo/flows/report.py", "demo/steps/calc.py"]))
+        self.assertEqual(len(rec["files"]["demo/steps/calc.py"]["sha"]), 64)  # 每個檔案綁定自己的內容
         self.assertEqual(rec["ref"], self.base)
         self.assertIn("語意審查：通過（0 個發現，沒有 priority 0／1）", self.p.air("status").stdout)
         self.assertIn("與目前的變更一致", self.p.air("status").stdout)
@@ -223,10 +244,16 @@ class TestResult(ReviewCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout)["schema"], review.SCHEMA)
 
-    def test_newer_result_replaces_older(self):
+    def test_newer_result_replaces_older_only_when_the_file_is_re_reviewed(self):
         self.submit(result([finding()]))
-        self.submit(result())
-        self.assertEqual(self.record()["blocking"], 0)
+        self.assertEqual(self.submit(result()).returncode, 2)  # 檔案沒變：舊的 P1 沿用，overall pass 對不上
+        self.assertEqual(self.record()["blocking"], 1)
+        r = self.submit(result(rereviewed=["demo/flows/report.py"]))  # 明說重審過、沒有發現：清掉
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.record()["blocking"], self.record()["reused"]), (0, 1))  # calc.py 沒變、也沒重審：沿用
+        r = self.submit(result(rereviewed=["nope.py"]))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("rereviewed：'nope.py' 不在這次變更的範圍", r.stderr)
 
     # ── 驗證：這些都不能記錄 ──
 
@@ -308,10 +335,41 @@ class TestResult(ReviewCase):
         self.assertEqual(state(), "fresh")
         self.p.write("demo/steps/calc.py", STEP_NEW + "# more\n")
         self.assertEqual(state(), "stale")
-        self.assertIn("已過期：之後變更的內容又變了，要重新審查", self.p.air("status").stdout)
+        self.assertIn("已過期：1 個檔案改過，只有它們要重審（其餘沿用）", self.p.air("status").stdout)
         self.p.commit("batch")
         self.assertEqual(state(), "clean")
         self.assertIn("目前沒有要審查的變更", self.p.air("status").stdout)
+
+    def test_only_changed_files_need_re_review_and_kept_findings_count(self):
+        # 實戰中最大的放大器之一：修掉一個發現就整批重審。改成每個檔案一筆，只有內容變了的檔案要重審
+        self.assertEqual(self.submit(result([finding()])).returncode, 1)  # report.py 有一個 P1，calc.py 沒有
+        self.p.write("demo/steps/calc.py", STEP_NEW + "# more\n")   # 只改 calc.py
+        sc = self.scope()
+        by = {f["path"]: f for f in sc["files"]}
+        self.assertEqual((by["demo/flows/report.py"]["reused"], by["demo/flows/report.py"]["findings"], by["demo/flows/report.py"]["blocking"]), (True, 1, 1))
+        self.assertFalse(by["demo/steps/calc.py"]["reused"])
+        self.assertNotIn("flows", sc["rules"])  # 沿用的檔案不再列規則
+        out = self.p.air("review").stdout
+        self.assertIn("沿用上次審查（內容沒變，不必重審）：demo/flows/report.py（1 個發現）", out)
+        self.assertNotIn("FLOW-3", out)
+        self.assertIn("已過期：1 個檔案改過", self.p.air("status").stdout)
+        # 只交 calc.py 的結果：結論要把沿用的 P1 算進去
+        r = self.submit(result([], overall="pass"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("overall 應該是 fail：有 priority 0 或 1 的發現（含沿用上次審查的檔案）", r.stderr)
+        r = self.submit(result([], overall="fail"))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("1 個檔案沿用上次審查的發現", r.stdout)
+        rec = self.record()
+        self.assertEqual(([f["rule"] for f in rec["findings"]], rec["reused"], rec["blocking"]), (["FLOW-3"], 1, 1))
+        self.assertEqual(json.loads(self.p.air("status", "--json").stdout)["last_review"]["state"], "fresh")
+        self.assertIn("全部沿用，沒有要重審的檔案", self.p.air("review").stdout)
+        # 修掉 report.py 的問題：只有它要重審；交回沒有發現就通過
+        self.p.write("demo/flows/report.py", FLOW_BEFORE + "# fixed\n")
+        self.assertEqual([f["path"] for f in self.scope()["files"] if not f["reused"]], ["demo/flows/report.py"])
+        self.assertEqual(self.submit(result()).returncode, 0)
+        rec = self.record()
+        self.assertEqual((rec["blocking"], rec["findings"], rec["overall"], rec["reused"]), (0, [], "pass", 1))
 
     def test_record_with_base_is_checked_against_the_same_base(self):
         self.git("branch", "base")
@@ -334,7 +392,7 @@ class TestSchemaMatchesValidator(unittest.TestCase):
         from tests.helpers import KIT
         schema = json.loads((KIT / "skills" / "air-review" / "schema.json").read_text(encoding="utf-8"))
         self.assertEqual(set(schema["required"]), set(review.TOP_KEYS))
-        self.assertEqual(set(schema["properties"]), set(review.TOP_KEYS))
+        self.assertEqual(set(schema["properties"]), set(review.TOP_KEYS) | set(review.OPTIONAL_KEYS))
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["overall"]["enum"], list(review.OVERALL))
         item = schema["properties"]["findings"]["items"]

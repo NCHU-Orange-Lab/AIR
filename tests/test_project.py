@@ -195,9 +195,24 @@ class TestSurveyAndStatus(ProjectTestCase):
         out = project.status(self.p.cfg())
         self.assertRegex(out, r"本機時間：\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{4}")  # AI 寫日期的依據
         self.assertIn("hook 錯誤（24 小時內）：無", out)
+        self.assertIn("成本指標（本機累計）：無", out)
         d = project.status_data(self.p.cfg())
         self.assertEqual(d["hook_errors"], 0)
         self.assertRegex(d["time"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{4}$")
+
+    def test_survey_out_writes_table_and_prints_summary(self):
+        self.p.write("demo/legacy.py", 'import requests\n\ndef load(p):\n    return open(p).read()\n')
+        r = self.p.air("survey", "--out", "docs/air-survey.md")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("模組數：2", r.stdout)
+        self.assertIn("requests（1）", r.stdout)
+        self.assertIn("`demo.legacy`（1 處）", r.stdout)
+        self.assertIn("完整的盤點表已寫入 docs/air-survey.md（2 列）", r.stdout)
+        self.assertNotIn("| 模組 |", r.stdout)  # 表不印進對話
+        table = (self.p.root / "docs" / "air-survey.md").read_text(encoding="utf-8")
+        self.assertIn("| `demo.legacy` |", table)
+        self.assertIn("| 模組 |", self.p.air("survey").stdout)  # 沒有 --out 維持原樣
+        self.assertIn("survey 2 次", self.p.air("status").stdout)
 
     def test_status_json(self):
         self.p.layer("steps", ok="x = 1\n")
@@ -206,6 +221,20 @@ class TestSurveyAndStatus(ProjectTestCase):
         d = json.loads(r.stdout)
         self.assertEqual((d["phase"], d["next_phase"], d["checked_files"], d["violations"], d["last_verify"]),
                          ("installed", "analyzed", 2, 0, None))
+
+
+class TestUsage(ProjectTestCase):
+    def test_summary_counts_and_chars_and_skips_bad_lines(self):
+        from airkit import usage
+        usage.record(self.p.root, "review-scope", chars=100, files=2)
+        usage.record(self.p.root, "review-scope", chars=50, files=1)
+        usage.record(self.p.root, "bogus", x=1)
+        path = self.p.root / ".air" / "metrics.jsonl"
+        path.write_text(path.read_text(encoding="utf-8") + "not json\n", encoding="utf-8")
+        s = usage.summary(self.p.root)
+        self.assertEqual((s["review-scope"], s["review-scope-chars"], s["verify"]), (2, 150, 0))
+        self.assertIn("審查範圍 2 次（共 150 字）", usage.describe(self.p.root))
+        self.assertEqual(usage.describe(self.p.root / "nowhere"), "無")
 
 
 class TestCheckCommand(ProjectTestCase):
@@ -219,6 +248,17 @@ class TestCheckCommand(ProjectTestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("AIR001", r.stdout)
         self.assertIn("未通過：1 個違規", r.stdout)
+
+    def test_repeated_violations_are_grouped(self):
+        # 實測一批 29 個違規有 49% 是重複的修法文字：同一種違規只印一次修法，底下列位置
+        self.p.layer("steps", a='print("x")\n', b='print("y")\n', c='print("z")\n')
+        r = self.p.air("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("AIR001 ×3：", r.stdout)
+        self.assertEqual(r.stdout.count("不能 print"), 1)
+        for name in ("a.py", "b.py", "c.py"):
+            self.assertIn(f"demo/steps/{name}:1:1", r.stdout)
+        self.assertEqual(len(json.loads(self.p.air("check", "--json").stdout)["hard"]), 3)  # --json 不分組
 
     def test_soft_rules_never_fail(self):
         body = "\n".join(f"    x{i} = {i}" for i in range(45))

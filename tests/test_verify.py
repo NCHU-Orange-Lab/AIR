@@ -29,6 +29,7 @@ class TestAccepted(ProjectTestCase):
         self.assertEqual(receipt["checks"][1]["exit"], 0)
         for key in ("head", "dirty", "source", "config", "air"):
             self.assertIn(key, receipt["fingerprint"])
+        self.assertIn("成本指標（本機累計）：verify 1 次", self.p.air("status").stdout)
 
     def test_json_output(self):
         r = self.p.air("verify", "--json")
