@@ -1,7 +1,7 @@
 """套件與接點的完整性（AIR009）：AIR/MANIFEST.sha256 與 hook、指引的接點。
 
 pre-edit hook 攔得到編輯工具；用 Bash 或其他程式改了 AIR/、拿掉 hook，就靠這裡在全專案檢查（結束前、commit 前）抓到。
-MANIFEST 由 AIR 的開發 repo 產生（python3 AIR/air.py manifest），列出套件裡每個檔案的 SHA-256（tests/ 除外）。
+MANIFEST 由 AIR 的開發 repo 產生（python3 AIR/air.py manifest），列出套件裡每個檔案的 SHA-256（tests/ 與 .github/ 除外）。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from . import hosts, install
 from .config import KIT_DIR
 
 MANIFEST = "MANIFEST.sha256"
-EXCLUDE_DIRS = {"tests", "__pycache__", ".git", ".pytest_cache"}  # 不影響行為的目錄不列入
+EXCLUDE_DIRS = {"tests", ".github", "__pycache__", ".git", ".pytest_cache"}  # 不影響行為的目錄不列入：測試、開發 repo 的 CI 設定、快取
 EXCLUDE_SUFFIXES = {".pyc"}
 FIX = "在專案裡不要修改 AIR/，要調整規範請照 skill air-maintain-rules；接點用 sh AIR/install.sh 重新安裝。"
 

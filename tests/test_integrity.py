@@ -18,6 +18,7 @@ class TestRepoManifest(unittest.TestCase):
         names = {p.relative_to(KIT).as_posix() for p in integrity.kit_files(KIT)}
         self.assertNotIn("tests/helpers.py", names)
         self.assertFalse(any("__pycache__" in n for n in names))
+        self.assertFalse(any(n.startswith(".github/") for n in names))  # 開發 repo 的 CI 設定不是套件的一部分
         self.assertIn("config.toml", names)
         self.assertIn("lib/airkit/checks.py", names)
         self.assertIn("hooks/pre_edit.sh", names)
