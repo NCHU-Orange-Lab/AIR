@@ -1,0 +1,5 @@
+# Codex 的 skill 介面設定（Claude Code 不讀這個檔案）
+interface:
+  display_name: "AIR Review"
+  short_description: "依 AIR 規則審查這次的變更（唯讀）"
+  default_prompt: "Use $air-review to review the uncommitted changes against AIR rules."

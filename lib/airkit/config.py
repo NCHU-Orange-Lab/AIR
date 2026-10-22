@@ -11,6 +11,7 @@ from pathlib import Path
 
 KIT_DIR = Path(__file__).resolve().parents[2]  # AIR/
 PROJECT_FILE = Path(".air") / "project.toml"
+REPORT_FILE = Path("docs") / "AIR-遷移報告.md"
 
 
 class ConfigError(Exception):
@@ -55,6 +56,7 @@ class Config:
     allow_legacy: tuple[Allowance, ...]
     phase: str
     test_command: str
+    test_timeout: int  # 秒；verify 執行測試指令的上限
 
 
 def build(kit: dict, project: dict, root: Path) -> Config:
@@ -100,6 +102,7 @@ def build(kit: dict, project: dict, root: Path) -> Config:
         allow_legacy=allow,
         phase=migration.get("phase", "installed"),
         test_command=proj.get("test-command", ""),
+        test_timeout=int(proj.get("test-timeout", 600)),
     )
 
 

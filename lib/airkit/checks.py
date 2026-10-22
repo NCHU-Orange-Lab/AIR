@@ -4,6 +4,7 @@
   AIR000 無法解析        AIR001 禁用的內建函式    AIR002 外部 import 不在白名單
   AIR003 層內循環 import  AIR004 禁用的方法名稱    AIR005 缺少必要參數
   AIR006 禁用的函式      AIR007 跨層方向錯誤      AIR008 import 尚未遷移的舊模組
+  AIR009 AIR 套件或接點被修改（只在全專案檢查時，見 integrity.py）
 軟規則（只提醒）：
   AIR101 函式語句過多    AIR102 函式過於複雜
 """
@@ -11,17 +12,26 @@
 from __future__ import annotations
 
 import ast
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import integrity
 from .config import Config, Layer
 from .metrics import complexity, functions, statements
-from .pyast import alias_map, call_name, has_required_arg, import_targets, matches, qualified
+from .pyast import call_name, has_required_arg, import_targets, matches, qualified, scoped_calls
 
 GENERIC_EXTERNAL = (
     "只能 import 白名單模組（AIR/config.toml 的 imports.common，加上 .air/project.toml 的 imports.extra）。"
     "第三方工具請包成 adapter（見 skill air-wrap-tool）；純計算函式庫要先問使用者是否加入白名單。"
 )
+
+
+def rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 @dataclass(frozen=True)
@@ -33,17 +43,69 @@ class Violation:
     msg: str
 
     def format(self, root: Path) -> str:
-        try:
-            shown = self.path.relative_to(root)
-        except ValueError:
-            shown = self.path
-        return f"{shown}:{self.line}:{self.col}: {self.code} {self.msg}"
+        return f"{rel(self.path, root)}:{self.line}:{self.col}: {self.code} {self.msg}"
+
+    def to_dict(self, root: Path) -> dict:
+        return {"path": rel(self.path, root), "line": self.line, "col": self.col, "code": self.code, "msg": self.msg}
+
+
+# 指定了檔案但沒檢查的原因
+MISSING, NOT_PY, OUTSIDE = "找不到檔案", "不是 .py", "不在任何層內"
+# verdict → CLI 結束碼
+EXIT = {"pass": 0, "not_applicable": 0, "violation": 1, "input_error": 2}
 
 
 @dataclass
 class Report:
     hard: list[Violation] = field(default_factory=list)
     soft: list[Violation] = field(default_factory=list)
+    checked: list[Path] = field(default_factory=list)  # 實際檢查過的檔案
+    skipped: list[tuple[Path, str]] = field(default_factory=list)  # 指定了但沒檢查的檔案與原因
+    legacy: list[Path] = field(default_factory=list)  # 全專案檢查時，層外的 .py（不檢查，只讓範圍看得見）
+
+    @property
+    def verdict(self) -> str:
+        """pass｜violation｜not_applicable（沒有檢查任何檔案）｜input_error（指定的檔案不存在）。
+
+        「沒有違規」和「有檢查過」是兩件事：空層的 pass 是 not_applicable，不能當成合規的證據。
+        """
+        if any(why == MISSING for _, why in self.skipped):
+            return "input_error"
+        if self.hard:
+            return "violation"
+        return "pass" if self.checked else "not_applicable"
+
+    def summary(self, root: Path) -> str:
+        n = len(self.checked)
+        if self.verdict == "input_error":
+            missing = "、".join(rel(p, root) for p, why in self.skipped if why == MISSING)
+            return f"錯誤：找不到檔案 {missing}"
+        if self.verdict == "violation":
+            return f"AIR 檢查未通過：{len(self.hard)} 個違規（檢查了 {n} 個檔案）"
+        if self.verdict == "not_applicable":
+            return "AIR 檢查：沒有檢查任何檔案（各層還是空的，或指定的檔案都不在層內）。這不代表合規。"
+        legacy = f"；舊程式碼 {len(self.legacy)} 個模組不檢查" if self.legacy else ""
+        return f"AIR 檢查通過（{n} 個檔案{legacy}）"
+
+    def to_dict(self, root: Path) -> dict:
+        return {
+            "schema": "air.check.v1",
+            "verdict": self.verdict,
+            "checked": [rel(p, root) for p in self.checked],
+            "skipped": [{"path": rel(p, root), "reason": why} for p, why in self.skipped],
+            "legacy": [rel(p, root) for p in self.legacy],
+            "hard": [v.to_dict(root) for v in self.hard],
+            "soft": [v.to_dict(root) for v in self.soft],
+        }
+
+
+def read_source(path: Path) -> str | Violation:
+    """依 Python 的 encoding cookie 讀原始碼；讀不了（編碼錯誤）就回 AIR000，不丟例外。"""
+    try:
+        with tokenize.open(path) as f:
+            return f.read()
+    except (SyntaxError, UnicodeDecodeError, LookupError) as e:
+        return Violation(path, 1, 1, "AIR000", f"無法解析：{e}")
 
 
 # ── 檔案與模組 ──
@@ -112,21 +174,21 @@ def import_violations(tree: ast.AST, package: str, layer: Layer, cfg: Config):
 # ── 呼叫（只檢查純的層）──
 
 def call_violations(tree: ast.AST, cfg: Config):
-    aliases = alias_map(tree)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node, aliases, bound in scoped_calls(tree):
         name, is_method = call_name(node)
         full = qualified(node.func, aliases)
         if full in cfg.banned_calls:
             yield node, "AIR006", f"`{full}()` is banned: {cfg.banned_calls[full]}"
-        elif not is_method and name in cfg.banned_builtins and name not in aliases:
+        elif not is_method and name in cfg.banned_builtins and name not in bound:
             yield node, "AIR001", f"`{name}()` is banned: {cfg.banned_builtins[name]}"
-        elif is_method and full is None and name in cfg.banned_methods:
+        elif is_method and name in cfg.banned_methods and not (full and full.startswith(cfg.package + ".")):
+            # 等價寫法 pd.DataFrame.to_csv(df, …) 也擋；只有解析到自己套件的模組函式才放行
             yield node, "AIR004", f"method `.{name}()` is banned: {cfg.banned_methods_msg}"
-        rule = cfg.required_args.get(name)
-        if rule and not has_required_arg(node, rule["keyword"], rule["position"]):
-            yield node, "AIR005", f"`{name}()` requires `{rule['keyword']}`: {rule['msg']}"
+        key = full.rsplit(".", 1)[-1] if full else name  # 別名過的建構式（rng = default_rng）也要對應回規則
+        rule = cfg.required_args.get(key)
+        # 同名的區域函式（def sample）不套用 pandas 的規則
+        if rule and (is_method or full or name not in bound) and not has_required_arg(node, rule["keyword"], rule["position"]):
+            yield node, "AIR005", f"`{key}()` requires `{rule['keyword']}`: {rule['msg']}"
 
 
 # ── 軟規則 ──
@@ -209,7 +271,10 @@ def cycle_violations(layer: Layer, cfg: Config, touched: set[Path] | None) -> li
         mod = module_of(f, cfg)
         if mod:
             files[mod[0]] = (f, mod[1])
-    sources = {m: (f.read_text(encoding="utf-8"), pkg) for m, (f, pkg) in files.items()}
+    sources = {}
+    for m, (f, pkg) in files.items():
+        source = read_source(f)
+        sources[m] = ("" if isinstance(source, Violation) else source, pkg)  # 讀不了的檔案在單檔檢查已報 AIR000
     out = []
     for cycle in find_cycles(import_graph(sources)):
         cycle_files = {files[m][0].resolve() for m in cycle}
@@ -223,20 +288,37 @@ def cycle_violations(layer: Layer, cfg: Config, touched: set[Path] | None) -> li
 # ── 整體 ──
 
 def check(cfg: Config, paths: list[Path] | None = None) -> Report:
-    """paths 為 None 時檢查所有層；否則只檢查給定檔案中位於層內的 .py。"""
+    """paths 為 None 時檢查所有層；否則只檢查給定檔案中位於層內的 .py。沒檢查的檔案與原因記在 report.skipped。"""
+    report, touched = Report(), {}
     if paths is None:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
+        if cfg.package_dir.is_dir():
+            report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None]
+        for path, detail in integrity.problems(cfg.root):  # 套件與接點被動過，最晚在這裡（結束前、commit 前）抓到
+            report.hard.append(Violation(path, 1, 1, "AIR009", f"AIR 套件或接點被修改：{detail}。{integrity.FIX}"))
     else:
-        targets = [p for p in paths if p.suffix == ".py" and p.exists()]
-    report, touched = Report(), {}
+        targets = []
+        for p in paths:
+            if p.suffix != ".py":
+                report.skipped.append((p, NOT_PY))
+            elif not p.exists():
+                report.skipped.append((p, MISSING))
+            else:
+                targets.append(p)
     for f in targets:
         layer = layer_of(f, cfg)
         mod = module_of(f, cfg) if layer else None
         if not mod:
+            report.skipped.append((f, OUTSIDE))
             continue
-        r = check_source(f.read_text(encoding="utf-8"), mod[0], mod[1], layer, cfg, f)
-        report.hard += r.hard
-        report.soft += r.soft
+        source = read_source(f)
+        if isinstance(source, Violation):
+            report.hard.append(source)
+        else:
+            r = check_source(source, mod[0], mod[1], layer, cfg, f)
+            report.hard += r.hard
+            report.soft += r.soft
+        report.checked.append(f)
         touched.setdefault(layer.name, set()).add(f.resolve())
     for layer in cfg.layers.values():
         if layer.check_cycles and layer.name in touched:

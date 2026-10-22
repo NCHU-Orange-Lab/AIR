@@ -1,0 +1,137 @@
+"""air doctor：接線診斷。裝好的專案沒有問題；少了 hook、skill 過期、舊版規則檔、override 都要被指出；只讀。"""
+
+import json
+import os
+import unittest
+
+from tests.helpers import ProjectTestCase
+from airkit import doctor, hosts, install
+
+
+class TestDoctor(ProjectTestCase):
+    git = True
+
+    def setUp(self):
+        super().setUp()
+        self.p.layer("steps", ok="x = 1\n")
+        self.assertEqual(self.p.air("install").returncode, 0)
+
+    def levels(self) -> dict[str, list[str]]:
+        items = doctor.diagnose(self.p.root)
+        return {"fail": [i.text for i in items if i.level == doctor.FAIL], "warn": [i.text for i in items if i.level == doctor.WARN]}
+
+    def test_fresh_install_has_no_problems(self):
+        r = self.p.air("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.levels()["fail"], [])
+        self.assertIn("[OK] Claude Code：.claude/settings.json 有 6 個 AIR hook", r.stdout)
+        self.assertIn("[OK] Codex：.codex/hooks.json 有 5 個 AIR hook", r.stdout)
+        self.assertIn("[OK] commit 前檢查", r.stdout)
+        self.assertTrue(any("信任" in w for w in self.levels()["warn"]))  # Codex 的 hook 要信任，AIR 無法確認
+
+    def test_json(self):
+        data = json.loads(self.p.air("doctor", "--json").stdout)
+        self.assertEqual((data["schema"], data["ok"], data["problems"]), ("air.doctor.v1", True, 0))
+        self.assertTrue(all({"level", "area", "text"} <= set(i) for i in data["items"]))
+
+    def test_removed_hook_is_a_problem_with_exit_1(self):
+        settings = self.p.root / ".claude" / "settings.json"
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        del data["hooks"]["Stop"]
+        settings.write_text(json.dumps(data), encoding="utf-8")
+        r = self.p.air("doctor")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("缺少 AIR 的 hook：Stop/stop.sh", r.stdout)
+
+    def test_deleted_hooks_file_of_installed_host_is_a_problem(self):
+        (self.p.root / ".codex" / "hooks.json").unlink()
+        self.assertTrue(any("不見了" in f for f in self.levels()["fail"]))
+
+    def test_host_not_installed_is_a_note_not_a_problem(self):
+        self.p.air("uninstall")
+        self.assertEqual(self.p.air("install", "--host", "claude").returncode, 0)
+        levels = self.levels()
+        self.assertEqual(levels["fail"], [])
+        self.assertTrue(any("未安裝" in w and "codex" in w for w in levels["warn"]))
+
+    def test_legacy_hook_form_is_a_note(self):
+        settings = self.p.root / ".claude" / "settings.json"
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        data["hooks"]["Stop"][0]["hooks"][0]["command"] = '"$CLAUDE_PROJECT_DIR"/AIR/hooks/stop.sh'
+        settings.write_text(json.dumps(data), encoding="utf-8")
+        levels = self.levels()
+        self.assertEqual(levels["fail"], [])
+        self.assertTrue(any("舊版" in w and "stop.sh" in w for w in levels["warn"]))
+
+    def test_stale_skill_is_a_note(self):
+        (self.p.root / ".claude" / "skills" / "air-migrate" / "SKILL.md").write_text("舊\n", encoding="utf-8")
+        self.assertTrue(any("air-migrate" in w and "不是目前版本" in w for w in self.levels()["warn"]))
+
+    def test_foreign_skill_is_a_note(self):
+        self.p.air("uninstall")
+        self.p.write(".claude/skills/air-migrate/SKILL.md", "mine\n")
+        self.p.air("install")
+        self.assertTrue(any("不是 AIR 建立的" in w for w in self.levels()["warn"]))
+
+    def test_stale_agents_block_is_a_note(self):
+        agents = self.p.root / "AGENTS.md"
+        agents.write_text(agents.read_text(encoding="utf-8").replace("## 架構", "## 舊架構"), encoding="utf-8")
+        self.assertTrue(any("AGENTS.md" in w and "不是目前版本" in w for w in self.levels()["warn"]))
+
+    def test_agents_override_is_a_note(self):
+        self.p.write("AGENTS.override.md", "# override\n")
+        self.assertTrue(any("AGENTS.override.md" in w for w in self.levels()["warn"]))
+
+    def test_broken_import_in_claude_md_is_a_problem(self):
+        claude = self.p.root / "CLAUDE.md"
+        claude.write_text(claude.read_text(encoding="utf-8").replace("@AGENTS.md", "@nowhere.md"), encoding="utf-8")
+        self.assertTrue(any("匯入的檔案不存在" in f for f in self.levels()["fail"]))
+
+    def test_legacy_rule_files_are_a_note(self):
+        self.p.write("demo/steps/CLAUDE.md", f"<!-- {install.MANAGED} 這個檔案由 AIR 產生 -->\n# 舊規則\n")
+        self.assertTrue(any("舊版留下的規則檔" in w and "demo/steps/CLAUDE.md" in w for w in self.levels()["warn"]))
+
+    def test_missing_python_file_is_a_note(self):
+        (self.p.root / ".air" / "python").unlink()
+        self.assertTrue(any("還沒跑過 install.sh" in w for w in self.levels()["warn"]))
+
+    def test_tampered_kit_is_a_problem(self):
+        path = self.p.root / "AIR" / "config.toml"
+        path.write_text(path.read_text(encoding="utf-8") + "\n# x\n", encoding="utf-8")
+        self.assertTrue(any("AIR/config.toml" in f for f in self.levels()["fail"]))
+
+    def test_not_installed_project_reports_config_problem_but_runs(self):
+        (self.p.root / ".air" / "project.toml").unlink()
+        r = self.p.air("doctor")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("找不到 .air/project.toml", r.stdout)
+        self.assertIn("commit 前檢查", r.stdout)
+
+    def test_doctor_is_read_only(self):
+        before = {p: p.stat().st_mtime for p in self.p.root.rglob("*") if p.is_file() and ".git" not in p.parts}
+        self.p.air("doctor")
+        after = {p: p.stat().st_mtime for p in self.p.root.rglob("*") if p.is_file() and ".git" not in p.parts}
+        self.assertEqual(before, after)
+
+    def test_precommit_config_without_pre_commit_install_is_a_note(self):
+        self.p.air("uninstall")
+        self.p.write(".pre-commit-config.yaml", "repos:\n  - repo: local\n    hooks: []\n")
+        self.p.air("install")
+        self.assertTrue(any("pre-commit install" in w for w in self.levels()["warn"]))
+
+
+class TestDoctorHosts(unittest.TestCase):
+    def test_all_hosts_are_diagnosed(self):
+        from tests.helpers import Project
+        p = Project(git=True)
+        try:
+            p.air("install")
+            areas = {i.area for i in doctor.diagnose(p.root)}
+            for host in hosts.HOSTS.values():
+                self.assertIn(host.label, areas)
+        finally:
+            p.cleanup()
+
+
+if __name__ == "__main__":
+    unittest.main()

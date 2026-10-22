@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIR 語意審查結果（python3 AIR/air.py review --result 接受的格式）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "overall", "explanation"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule", "title", "body", "confidence", "priority", "path", "lines"],
+        "properties": {
+          "rule": {"type": "string", "pattern": "^[A-Z]+-[0-9]+$", "description": "規則編號，必須是 review 列出的其中一條"},
+          "title": {"type": "string", "minLength": 1},
+          "body": {"type": "string", "minLength": 1, "description": "哪裡、為什麼違反、怎麼修"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "不到 0.5 的不報"},
+          "priority": {"type": "integer", "minimum": 0, "maximum": 3, "description": "0 立刻處理、1 必須處理、2 建議、3 提醒"},
+          "path": {"type": "string", "description": "相對專案根目錄，必須是 review 列出的檔案"},
+          "lines": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": {"type": "integer", "minimum": 1},
+              "end": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "overall": {"type": "string", "enum": ["pass", "fail"], "description": "有 priority 0 或 1 的發現就是 fail"},
+    "explanation": {"type": "string"}
+  }
+}

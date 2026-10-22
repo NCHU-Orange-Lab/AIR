@@ -1,9 +1,11 @@
-"""AST 工具：import 解析、別名解析、前綴比對。"""
+"""AST 工具：import 解析、作用域內的名稱綁定與別名、前綴比對。"""
 
 from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 
 
 def matches(name: str, prefixes) -> str | None:
@@ -36,10 +38,27 @@ def import_targets(tree: ast.AST, package: str) -> Iterator[tuple[ast.stmt, str]
                     yield node, f"{prefix}.{alias.name}"
 
 
-def alias_map(tree: ast.AST) -> dict[str, str]:
-    """區域名稱 → 完整名稱，例如 pd → pandas、datetime → datetime.datetime。"""
+# ── 作用域 ──
+
+def iter_own(scope: ast.AST) -> Iterator[ast.AST]:
+    """走訪 scope 的子孫，但不進入巢狀的作用域（它們各自處理）。"""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def bindings(scope: ast.AST) -> tuple[dict[str, str], set[str]]:
+    """scope 本體直接綁定的名稱：(import 別名 → 完整名稱, 所有綁定的名稱)。
+
+    別名例如 pd → pandas、datetime → datetime.datetime。綁定的名稱還包括參數、賦值、def、class，
+    用來判斷 print、sample 這類名稱是不是已經被區域定義遮蔽。
+    """
     aliases: dict[str, str] = {}
-    for node in ast.walk(tree):
+    bound: set[str] = set()
+    for node in iter_own(scope):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
@@ -47,12 +66,45 @@ def alias_map(tree: ast.AST) -> dict[str, str]:
                 else:
                     head = alias.name.split(".")[0]
                     aliases[head] = head
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name != "*":
+                if alias.name == "*":
+                    continue
+                if node.level == 0 and node.module:
                     aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
-    return aliases
+                else:
+                    bound.add(alias.asname or alias.name)  # 相對 import：名稱已綁定，但不是外部模組
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return aliases, bound | set(aliases)
 
+
+def scoped_calls(tree: ast.AST) -> Iterator[tuple[ast.Call, dict[str, str], set[str]]]:
+    """每個 Call，加上它所在位置看得到的別名與綁定：本作用域、外層函式、模組（class 本體不會洩漏給方法）。"""
+
+    def visit(scope: ast.AST, chain: list[tuple[dict[str, str], set[str], bool]]) -> Iterator:
+        own = (*bindings(scope), isinstance(scope, ast.ClassDef))
+        aliases: dict[str, str] = {}
+        bound: set[str] = set()
+        for a, b, _ in [s for s in chain if not s[2]] + [own]:
+            aliases.update(a)
+            bound |= b
+        for node in iter_own(scope):
+            if isinstance(node, ast.Call):
+                yield node, aliases, bound
+            elif isinstance(node, SCOPES):
+                yield from visit(node, chain + [own])
+
+    yield from visit(tree, [])
+
+
+# ── 呼叫 ──
 
 def dotted(expr: ast.expr) -> str | None:
     if isinstance(expr, ast.Name):
@@ -84,9 +136,17 @@ def call_name(node: ast.Call) -> tuple[str | None, bool]:
     return None, False
 
 
+def _is_none(expr: ast.expr) -> bool:
+    return isinstance(expr, ast.Constant) and expr.value is None
+
+
 def has_required_arg(node: ast.Call, keyword: str, position: int) -> bool:
-    if any(kw.arg is None or kw.arg == keyword for kw in node.keywords):  # kw.arg is None：**kwargs
-        return True
+    """keyword=None、位置上的 None、空的 **{} 都算沒給；無法靜態判斷的 *args、**kwargs 視為已提供。"""
+    for kw in node.keywords:
+        if kw.arg == keyword:
+            return not _is_none(kw.value)
+        if kw.arg is None and not (isinstance(kw.value, ast.Dict) and not kw.value.keys):
+            return True
     if any(isinstance(a, ast.Starred) for a in node.args):
         return True
-    return len(node.args) > position
+    return len(node.args) > position and not _is_none(node.args[position])
