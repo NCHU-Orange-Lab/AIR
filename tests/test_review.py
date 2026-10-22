@@ -242,6 +242,11 @@ class TestResult(ReviewCase):
     def test_partially_checked_rule_is_allowed(self):
         self.assertEqual(self.submit(result([finding(rule="FLOW-2")])).returncode, 1)
 
+    def test_backslash_path_from_windows_reviewer_is_normalised(self):
+        r = self.submit(result([finding(path="demo\\flows\\report.py")]))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(self.record()["findings"][0]["path"], "demo/flows/report.py")
+
     def test_path_outside_scope(self):
         self.p.write("demo/legacy.py", "x = 1\n")
         self.assert_rejected(result([finding(path="demo/legacy.py")]), "'demo/legacy.py' 不在這次變更的範圍")

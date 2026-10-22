@@ -1,21 +1,26 @@
-"""air doctor：診斷接線。Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、舊版留下的檔案、commit 前檢查。
+"""air doctor：診斷接線。Python、設定、套件完整性、指引、每個宿主的 hook 與 skill（含真的跑一次的冒煙測試）、
+舊版留下的檔案、commit 前檢查、最近的 hook 錯誤。
 
 只讀，不修改任何東西；修法都是明確的指令（多半是 sh AIR/install.sh）。
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import hosts, install, integrity
+from . import hooklog, hosts, install, integrity
 from .config import Config, ConfigError, load
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 MARK = {OK: "[OK]", WARN: "[注意]", FAIL: "[問題]"}
 REINSTALL = "執行 sh AIR/install.sh"
+SMOKE_TIMEOUT = 30  # 冒煙測試：每個 hook 最多等這麼久（秒）
 
 
 @dataclass(frozen=True)
@@ -35,7 +40,7 @@ def _python(root: Path) -> Item:
     exe = path.read_text(encoding="utf-8").strip()
     try:
         out = subprocess.run([exe, "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"],
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired) as e:
         return Item(FAIL, "Python", f".air/python 指向 {exe}，但執行不了（{type(e).__name__}）。{REINSTALL}")
     version = out.stdout.strip()
@@ -74,7 +79,7 @@ def _instructions(root: Path) -> list[Item]:
     items = []
     claude = install.claude_md_path(root)
     text = claude.read_text(encoding="utf-8") if claude.exists() else ""
-    name = claude.relative_to(root)
+    name = claude.relative_to(root).as_posix()
     if install.BEGIN not in text:
         items.append(Item(FAIL, "指引", f"{name} 沒有 AIR 的區塊。{REINSTALL}"))
     else:
@@ -101,24 +106,24 @@ def _host(root: Path, host: hosts.Host, expected: bool) -> list[Item]:
     hooks_file = root / host.hooks_file
     if not hooks_file.exists():
         if expected:
-            return [Item(FAIL, host.label, f"這台電腦裝過 {host.label} 的接點，但 {host.hooks_file} 不見了。{REINSTALL}")]
-        return [Item(WARN, host.label, f"未安裝（沒有 {host.hooks_file}）。要在 {host.label} 使用 AIR：sh AIR/install.sh --host {host.name}")]
+            return [Item(FAIL, host.label, f"這台電腦裝過 {host.label} 的接點，但 {host.hooks_file.as_posix()} 不見了。{REINSTALL}")]
+        return [Item(WARN, host.label, f"未安裝（沒有 {host.hooks_file.as_posix()}）。要在 {host.label} 使用 AIR：sh AIR/install.sh --host {host.name}")]
     try:
         data = install.read_hooks(hooks_file)
     except ValueError as e:
-        return [Item(FAIL, host.label, f"{host.hooks_file} 無法解析（{e}）。修正後{REINSTALL}")]
+        return [Item(FAIL, host.label, f"{host.hooks_file.as_posix()} 無法解析（{e}）。修正後{REINSTALL}")]
     items = []
     missing = install.missing_hooks(data, host)
     if missing:
-        items.append(Item(FAIL, host.label, f"{host.hooks_file} 缺少 AIR 的 hook：{'、'.join(missing)}。{REINSTALL}"))
+        items.append(Item(FAIL, host.label, f"{host.hooks_file.as_posix()} 缺少 AIR 的 hook：{'、'.join(missing)}。{REINSTALL}"))
     else:
-        items.append(Item(OK, host.label, f"{host.hooks_file} 有 {len(host.scripts)} 個 AIR hook"))
+        items.append(Item(OK, host.label, f"{host.hooks_file.as_posix()} 有 {len(host.scripts)} 個 AIR hook"))
     stale = install.stale_hooks(data, host)
     if stale:
-        items.append(Item(WARN, host.label, f"{host.hooks_file} 有舊版或別的宿主格式的 AIR hook（{'、'.join(stale)}）。{REINSTALL}"))
+        items.append(Item(WARN, host.label, f"{host.hooks_file.as_posix()} 有舊版或別的宿主格式的 AIR hook（{'、'.join(stale)}）。{REINSTALL}"))
     for script in {script for _, _, script in install.air_hooks(data)}:
         if not (kit / "hooks" / script).exists():
-            items.append(Item(FAIL, host.label, f"{host.hooks_file} 指向不存在的腳本 AIR/hooks/{script}。{REINSTALL}"))
+            items.append(Item(FAIL, host.label, f"{host.hooks_file.as_posix()} 指向不存在的腳本 AIR/hooks/{script}。{REINSTALL}"))
     missing_skills, foreign, stale_skills = [], [], []
     for name in install.skill_names():
         dest = root / host.skills_dir / name
@@ -129,13 +134,13 @@ def _host(root: Path, host: hosts.Host, expected: bool) -> list[Item]:
         elif install.skill_differs(kit / "skills" / name, dest):
             stale_skills.append(name)
     if missing_skills:
-        items.append(Item(WARN, host.label, f"{host.skills_dir}/ 缺少 skill：{'、'.join(missing_skills)}。{REINSTALL}"))
+        items.append(Item(WARN, host.label, f"{host.skills_dir.as_posix()}/ 缺少 skill：{'、'.join(missing_skills)}。{REINSTALL}"))
     if foreign:
-        items.append(Item(WARN, host.label, f"{host.skills_dir}/ 裡的 {'、'.join(foreign)} 不是 AIR 建立的，AIR 的版本沒有安裝"))
+        items.append(Item(WARN, host.label, f"{host.skills_dir.as_posix()}/ 裡的 {'、'.join(foreign)} 不是 AIR 建立的，AIR 的版本沒有安裝"))
     if stale_skills:
-        items.append(Item(WARN, host.label, f"{host.skills_dir}/ 的 {'、'.join(stale_skills)} 不是目前版本。{REINSTALL}"))
+        items.append(Item(WARN, host.label, f"{host.skills_dir.as_posix()}/ 的 {'、'.join(stale_skills)} 不是目前版本。{REINSTALL}"))
     if not (missing_skills or foreign or stale_skills):
-        items.append(Item(OK, host.label, f"{host.skills_dir}/ 有 {len(install.skill_names())} 個 skill"))
+        items.append(Item(OK, host.label, f"{host.skills_dir.as_posix()}/ 有 {len(install.skill_names())} 個 skill"))
     if host.note:
         items.append(Item(WARN, host.label, f"{host.note}（AIR 無法從外部確認是否已信任）"))
     return items
@@ -148,10 +153,54 @@ def _stale_rules(root: Path, cfg: Config | None) -> list[Item]:
     for directory in [la.path for la in cfg.layers.values()] + [cfg.tests_dir]:
         dest = directory / "CLAUDE.md"
         if dest.exists() and install.MANAGED in dest.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0]:
-            stale.append(str(dest.relative_to(root)))
+            stale.append(dest.relative_to(root).as_posix())
     if not stale:
         return []
     return [Item(WARN, "規則", f"舊版留下的規則檔 {'、'.join(stale)}（規則改由 hook 注入）。{REINSTALL} 會移除")]
+
+
+def _smoke(root: Path, host: hosts.Host) -> list[Item]:
+    """真的把每個 hook 跑一次：用設定檔裡同一條指令、送最小的 payload。只看「設定在不在」抓不到「跑不起來」
+    （Windows 找不到 Python 時 exit 49、cp950 讓輸出不是 UTF-8），而宿主對這些失敗一律放行、不告訴任何人。
+    合格：結束碼是 0 或 2、stdout 若有內容就是合法的 UTF-8 JSON。"""
+    try:
+        data = install.read_hooks(root / host.hooks_file)
+    except (OSError, ValueError):
+        return []
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root)}
+    items, ran = [], []
+    for _event, command, script in install.air_hooks(data):
+        start = time.monotonic()
+        try:
+            r = subprocess.run(["sh", "-c", command], cwd=root, input=b"{}", capture_output=True, timeout=SMOKE_TIMEOUT, env=env)
+        except FileNotFoundError:
+            return [Item(FAIL, host.label, "找不到 sh：hook 要用 POSIX shell 執行（Windows 請安裝 Git for Windows）")]
+        except subprocess.TimeoutExpired:
+            items.append(Item(FAIL, host.label, f"hook {script} 超過 {SMOKE_TIMEOUT} 秒沒有結束"))
+            continue
+        ms = int((time.monotonic() - start) * 1000)
+        err = r.stderr.decode("utf-8", "replace").strip().splitlines()
+        if r.returncode not in (0, 2):
+            items.append(Item(FAIL, host.label, f"hook {script} 跑不起來（exit {r.returncode}：{err[-1] if err else '沒有輸出'}）；宿主會當成非阻擋錯誤放行。{REINSTALL}"))
+            continue
+        if r.stdout.strip():
+            try:
+                json.loads(r.stdout.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as e:
+                items.append(Item(FAIL, host.label, f"hook {script} 的輸出不是合法的 UTF-8 JSON（{type(e).__name__}）：宿主會忽略它"))
+                continue
+        ran.append(ms)
+    if not items:
+        items.append(Item(OK, host.label, f"hook 冒煙測試：{len(ran)} 個都能執行（共 {sum(ran)} ms）"))
+    return items
+
+
+def _hook_errors(root: Path) -> list[Item]:
+    items = hooklog.recent(root)
+    if not items:
+        return []
+    _, where, reason = items[-1]
+    return [Item(WARN, "hook", f"最近 24 小時 hook 失敗 {len(items)} 次（{hooklog.LOG_FILE.as_posix()}）；最近一次 {where}：{reason}")]
 
 
 def _commit_check(root: Path) -> Item:
@@ -174,8 +223,11 @@ def diagnose(root: Path) -> list[Item]:
     installed = install.installed_hosts(root) or []
     for host in hosts.HOSTS.values():
         items += _host(root, host, host in installed)
+        if host in installed and (root / host.hooks_file).exists():
+            items += _smoke(root, host)
     items += _stale_rules(root, cfg)
     items.append(_commit_check(root))
+    items += _hook_errors(root)
     return items
 
 

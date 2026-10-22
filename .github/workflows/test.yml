@@ -1,6 +1,11 @@
 # AIR 套件自己的測試：push 到 main 與每個 pull request 都在 GitHub 上跑一次。
 # 套件零相依，只用標準庫，所以不需要 pip install；指令與本機相同：
 #   python3 -m unittest discover -s tests -t .
+# 三組 job：
+#   Python 3.x          ubuntu，四個版本（main 的分支保護要求這四個通過）
+#   Windows Python 3.x  windows，四個版本：hook 由 Git Bash 執行、路徑分隔符、逾時要用 taskkill——實戰專案就在 Windows 上
+#   cp950               ubuntu，把 Python 的標準輸出入強制成 cp950（zh-TW Windows 的預設）跑整套測試：
+#                       hook 的輸出入不能受系統語系影響，否則含中文的 payload 會解析失敗而放行、規則注入會變亂碼
 # 注意：這裡不跑 python air.py check，它需要 .air/project.toml（裝好 AIR 的專案才有），在套件 repo 本身會直接報錯。
 name: tests
 
@@ -25,4 +30,31 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -s tests -t .
+
+  windows:
+    name: Windows Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -s tests -t .
+
+  cp950:
+    name: cp950
+    runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: cp950
+      PYTHONUTF8: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - run: python -m unittest discover -s tests -t .

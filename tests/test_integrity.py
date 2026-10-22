@@ -23,6 +23,7 @@ class TestRepoManifest(unittest.TestCase):
         self.assertIn("lib/airkit/checks.py", names)
         self.assertIn("hooks/pre_edit.sh", names)
         self.assertIn("hooks/session_start.sh", names)
+        self.assertIn("hooks/_python.sh", names)
 
 
 class TestManifest(ProjectTestCase):

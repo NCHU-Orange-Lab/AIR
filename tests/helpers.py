@@ -36,9 +36,9 @@ phase = "{phase}"
 allow-legacy = [{allow}]
 """
 
-# 給 test-command 用的指令（用目前的直譯器，不依賴 PATH 上的 python3）
-TESTS_PASS = f"{sys.executable} -c 'import sys; sys.exit(0)'"
-TESTS_FAIL = f"{sys.executable} -c 'import sys; sys.exit(1)'"
+# 給 test-command 用的指令（用目前的直譯器，不依賴 PATH 上的 python3）。用雙引號：Windows 的 cmd.exe 不把單引號當引號
+TESTS_PASS = f'"{sys.executable}" -c "import sys; sys.exit(0)"'
+TESTS_FAIL = f'"{sys.executable}" -c "import sys; sys.exit(1)"'
 
 
 class Project:
@@ -125,8 +125,9 @@ class Project:
         return self.air(*args, stdin=payload if isinstance(payload, str) else json.dumps(payload), cwd=cwd)
 
     def sh(self, command: str, stdin: str = "", env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
+        """用 POSIX shell 跑一條指令。宿主在 Windows 上也是用 Git Bash 跑 hook，所以不用 shell=True（那是 cmd.exe）。"""
         return subprocess.run(
-            command, shell=True, cwd=cwd or self.root, input=stdin, capture_output=True, text=True, encoding="utf-8",
+            ["sh", "-c", command], cwd=cwd or self.root, input=stdin, capture_output=True, text=True, encoding="utf-8",
             env={**os.environ, **(env or {})},
         )
 

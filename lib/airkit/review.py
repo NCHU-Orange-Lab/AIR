@@ -218,7 +218,8 @@ def validate(sc: dict, data) -> tuple[list[str], list[dict]]:
         if extra:
             errors.append(f"{tag}：不認得的欄位 {'、'.join(sorted(extra))}（只能有 {'、'.join(FINDING_KEYS)}）")
         rule = known.get(f.get("rule")) if isinstance(f.get("rule"), str) else None
-        file = files.get(f.get("path")) if isinstance(f.get("path"), str) else None
+        path_key = f["path"].replace("\\", "/") if isinstance(f.get("path"), str) else None  # Windows 上的審查者可能交回反斜線
+        file = files.get(path_key) if path_key else None
         if rule is None:
             errors.append(f"{tag}：沒有規則 {f.get('rule')!r}（只能引用 review 列出的規則編號）")
         if file is None:
@@ -245,7 +246,7 @@ def validate(sc: dict, data) -> tuple[list[str], list[dict]]:
             errors.append(f"{tag}：第 {_ranges([list(rng)])} 行不在這次改到的行（{_ranges(file['changed_lines'])}）附近；"
                           "既有問題不報，確實由這次變更引入的，把行號指到改到的行")
         if len(errors) == before:
-            out.append({**f, "level": rule.level, "rule_text": rule.text, "rule_source": {"path": rule.source, "line": rule.line}})
+            out.append({**f, "path": path_key, "level": rule.level, "rule_text": rule.text, "rule_source": {"path": rule.source, "line": rule.line}})
     if not errors:
         blocking = any(f["priority"] in BLOCKING for f in out)
         expected = "fail" if blocking else "pass"

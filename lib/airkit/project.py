@@ -5,9 +5,10 @@ from __future__ import annotations
 import ast
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
-from . import install, review, verify
+from . import hooklog, install, review, verify
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
@@ -31,13 +32,13 @@ def create_layers(cfg: Config, names: list[str] | None = None) -> list[str]:
         init = layer.path / "__init__.py"
         if not init.exists():
             init.write_text("", encoding="utf-8")
-            created.append(str(init.relative_to(cfg.root)))
+            created.append(init.relative_to(cfg.root).as_posix())
         if name == "contracts":
             for stub in ("types.py", "ports.py"):
                 dest = layer.path / stub
                 if not dest.exists():
                     dest.write_text((KIT_DIR / "templates" / f"contracts_{stub}").read_text(encoding="utf-8"), encoding="utf-8")
-                    created.append(str(dest.relative_to(cfg.root)))
+                    created.append(dest.relative_to(cfg.root).as_posix())
     return created
 
 
@@ -161,7 +162,7 @@ def survey(cfg: Config) -> str:
     out = [
         f"# AIR survey：{cfg.package}",
         "",
-        f"- 套件目錄：`{cfg.package_dir.relative_to(cfg.root)}`",
+        f"- 套件目錄：`{cfg.package_dir.relative_to(cfg.root).as_posix()}`",
         f"- 模組數：{len(rows)}（已在層內：{sum(1 for r in rows if r['layer'])}）",
         "",
         "訊號代碼：AIR001 內建 I/O（open、print…）、AIR004 讀寫方法、AIR005 缺少 seed、AIR006 禁用函式（讀檔、時間、亂數）",
@@ -182,6 +183,11 @@ def survey(cfg: Config) -> str:
     return "\n".join(out) + "\n"
 
 
+def local_time() -> str:
+    """本機時間，給 status 與 session 開始時的狀態用：AI 寫日期的依據（實戰中 AI 手寫的日期曾比時鐘超前 1–2 天）。"""
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %z")
+
+
 def status_data(cfg: Config) -> dict:
     """狀態的結構化版本（status --json）；由目前的設定、檢查結果與驗收紀錄重新算，不信任任何摘要。"""
     report = check(cfg)
@@ -190,8 +196,9 @@ def status_data(cfg: Config) -> dict:
     index = PHASES.index(cfg.phase) if cfg.phase in PHASES else -1
     return {
         "schema": "air.status.v1",
+        "time": local_time(),
         "package": cfg.package,
-        "package_dir": str(cfg.package_dir.relative_to(cfg.root)),
+        "package_dir": cfg.package_dir.relative_to(cfg.root).as_posix(),
         "phase": cfg.phase,
         "next_phase": PHASES[index + 1] if 0 <= index < len(PHASES) - 1 else None,
         "layers": [la.name for la in cfg.layers.values() if la.path.is_dir()],
@@ -202,6 +209,8 @@ def status_data(cfg: Config) -> dict:
         "warnings": len(report.soft),
         "integrity": [v.format(cfg.root) for v in report.hard if v.code == "AIR009"],
         "commit_check": install.commit_check_status(cfg.root),
+        "hook_errors": len(hooklog.recent(cfg.root)),
+        "hook_errors_text": hooklog.describe(cfg.root),
         "test_command": cfg.test_command,
         "last_verify": None if receipt is None else {
             "state": verify.receipt_state(cfg, receipt), "accepted": receipt["accepted"],
@@ -221,6 +230,7 @@ def status(cfg: Config) -> str:
     problems = d["integrity"]
     integrity_line = "正常" if not problems else f"{len(problems)} 個問題（AIR009，見 python3 AIR/air.py check）"
     lines = [
+        f"本機時間：{d['time']}",
         f"套件：{d['package']}（{d['package_dir']}）",
         f"遷移階段：{d['phase']}（{' → '.join(PHASES)}）",
         f"已建立的層：{'、'.join(d['layers']) or '無'}",
@@ -229,6 +239,7 @@ def status(cfg: Config) -> str:
         f"違規：{d['violations']}　提醒：{d['warnings']}",
         f"套件完整性：{integrity_line}",
         f"commit 前檢查：{d['commit_check']}",
+        f"hook 錯誤（24 小時內）：{d['hook_errors_text']}",
         f"測試指令：{d['test_command'] or '（尚未設定）'}",
         f"最近驗收：{d['last_verify_text']}",
         f"語意審查：{d['last_review_text']}",

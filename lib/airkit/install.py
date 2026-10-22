@@ -102,7 +102,7 @@ def detect_packages(root: Path) -> list[tuple[str, str]]:
 
 def git_toplevel(root: Path) -> Path | None:
     try:
-        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True, check=True)
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
         return Path(out.stdout.strip()).resolve()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
@@ -134,7 +134,7 @@ def write_project_file(root: Path, package: str, package_dir: str) -> str:
     return "created"
 
 
-AIR_IGNORE = ["python", "hosts", "verify.json", "review.json", "sessions"]  # 這台電腦的 Python 路徑與裝了哪些宿主、本機的驗收與審查紀錄、hook 的注入紀錄：都不進版本控制
+AIR_IGNORE = ["python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log"]  # 這台電腦的 Python 路徑與裝了哪些宿主、本機的驗收與審查紀錄、hook 的注入紀錄與錯誤紀錄：都不進版本控制
 HOSTS_FILE = Path(".air") / "hosts"
 
 
@@ -147,7 +147,7 @@ def write_local_state(root: Path, selected: list[hosts.Host]) -> None:
     existing = ignore.read_text(encoding="utf-8").splitlines() if ignore.exists() else []
     missing = [name for name in AIR_IGNORE if name not in existing]
     if missing:
-        header = [] if existing else ["# 由 AIR/install.sh 產生：這台電腦的 Python 路徑與宿主、本機的驗收紀錄、hook 的注入紀錄"]
+        header = [] if existing else ["# 由 AIR/install.sh 產生：這台電腦的 Python 路徑與宿主、本機的驗收與審查紀錄、hook 的注入與錯誤紀錄"]
         ignore.write_text("\n".join(existing + header + missing) + "\n", encoding="utf-8")
 
 
@@ -189,7 +189,7 @@ def ensure_instructions(root: Path) -> list[str]:
     # AIR 自己建立的 CLAUDE.md 只匯入 AGENTS.md（常駐規則全文在那裡，使用者原有的 AGENTS.md 內容也一起讀到）。
     # 使用者自己的 CLAUDE.md 匯入 AIR/AGENTS.md：有了 CLAUDE.md 之後 Claude Code 不會再讀 AGENTS.md，不會讀到兩份。
     target = root / "AGENTS.md" if _owned(claude) else root / "AIR" / "AGENTS.md"
-    out = [f"{claude.relative_to(root)}：{ensure_block(claude, md_block('@' + rel(target)), BEGIN)}"]
+    out = [f"{claude.relative_to(root).as_posix()}：{ensure_block(claude, md_block('@' + rel(target)), BEGIN)}"]
     out.append(f"AGENTS.md：{ensure_block(root / 'AGENTS.md', md_block(agents_body()), BEGIN)}")
     if (root / "AGENTS.override.md").exists():
         out.append("注意：根目錄有 AGENTS.override.md，Codex 只讀它、不讀 AGENTS.md。請把 AGENTS.md 的 AIR 區塊搬進去，或移除 override")
@@ -319,7 +319,7 @@ def ensure_skills(root: Path, host: hosts.Host) -> tuple[list[str], list[str]]:
     for name in skill_names():
         src, dest = KIT_DIR / "skills" / name, root / host.skills_dir / name
         if dest.exists() and not (dest / SKILL_MARK).exists():
-            skipped.append(f"略過 {dest.relative_to(root)}：已經存在，而且不是 AIR 建立的")
+            skipped.append(f"略過 {dest.relative_to(root).as_posix()}：已經存在，而且不是 AIR 建立的")
             continue
         if dest.exists():
             shutil.rmtree(dest)
@@ -335,7 +335,7 @@ def remove_skills(root: Path, host: hosts.Host) -> list[str]:
     for d in sorted(base.iterdir()) if base.is_dir() else []:
         if (d / SKILL_MARK).exists():
             shutil.rmtree(d)
-            removed.append(str(d.relative_to(root)))
+            removed.append(d.relative_to(root).as_posix())
     _prune_empty_dirs(base, root)
     return removed
 
@@ -349,7 +349,7 @@ def remove_rules(cfg: Config) -> list[str]:
         dest = directory / "CLAUDE.md"
         if dest.exists() and MANAGED in dest.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0]:
             dest.unlink()
-            removed.append(str(dest.relative_to(cfg.root)))
+            removed.append(dest.relative_to(cfg.root).as_posix())
     return removed
 
 
@@ -370,7 +370,7 @@ def precommit_block(indent: str) -> str:
 
 
 def git_hook_path(root: Path) -> Path:
-    out = subprocess.run(["git", "rev-parse", "--git-path", "hooks/pre-commit"], cwd=root, capture_output=True, text=True, check=True)
+    out = subprocess.run(["git", "rev-parse", "--git-path", "hooks/pre-commit"], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     return (root / out.stdout.strip()).resolve()
 
 
@@ -425,7 +425,7 @@ def remove_commit_check(root: Path) -> str:
 
 def _skill_lines(root: Path, host: hosts.Host) -> list[str]:
     installed, skipped = ensure_skills(root, host)
-    return ([f"{host.skills_dir}/：{'、'.join(installed)}"] if installed else []) + skipped
+    return ([f"{host.skills_dir.as_posix()}/：{'、'.join(installed)}"] if installed else []) + skipped
 
 
 def install(root: Path, package: str | None, package_dir: str | None, host_names: list[str] | None = None) -> list[str]:
@@ -448,8 +448,8 @@ def install(root: Path, package: str | None, package_dir: str | None, host_names
         ("CLAUDE.md、AGENTS.md", lambda: ensure_instructions(root)),
     ]
     for host in selected:
-        steps.append((str(host.hooks_file), lambda h=host: [f"{h.hooks_file}：{ensure_hooks(root, h)}"] + ([f"注意：{h.note}"] if h.note else [])))
-        steps.append((str(host.skills_dir), lambda h=host: _skill_lines(root, h)))
+        steps.append((host.hooks_file.as_posix(), lambda h=host: [f"{h.hooks_file.as_posix()}：{ensure_hooks(root, h)}"] + ([f"注意：{h.note}"] if h.note else [])))
+        steps.append((host.skills_dir.as_posix(), lambda h=host: _skill_lines(root, h)))
     steps += [
         ("commit 前檢查", lambda: [ensure_commit_check(root)] if git_toplevel(root) else []),
         ("舊版規則檔", lambda: [f"移除 {r}（舊版的規則檔；規則改由 hook 注入）" for r in remove_rules(load(root))]),
@@ -472,10 +472,10 @@ def uninstall(root: Path, purge: bool) -> list[str]:
         pass
     for path in (claude_md_path(root), root / "AGENTS.md"):
         if remove_block(path, f"<!-- {BEGIN}", f"<!-- {END}"):
-            lines.append(f"移除 {path.relative_to(root)} 的區塊")
+            lines.append(f"移除 {path.relative_to(root).as_posix()} 的區塊")
     for host in hosts.HOSTS.values():
         if remove_hooks(root, host):
-            lines.append(f"移除 {host.hooks_file} 的 hook")
+            lines.append(f"移除 {host.hooks_file.as_posix()} 的 hook")
         lines += [f"移除 skill {s}" for s in remove_skills(root, host)]
     removed = remove_commit_check(root)
     if removed:
