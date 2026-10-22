@@ -43,6 +43,7 @@ class TestClassify(ProjectTestCase):
     def test_other_air_records_denied(self):
         self.assertEqual(self.decide(".air/history.jsonl"), DENY)
         self.assertEqual(self.decide(".air/verify.json"), DENY)
+        self.assertEqual(self.decide(".air/review.json"), DENY)  # 審查紀錄只能由 review --result 寫
         self.assertEqual(self.decide(".air/sessions/s1.json"), DENY)
 
     def test_managed_skill_denied_in_every_host_but_user_skill_allowed(self):

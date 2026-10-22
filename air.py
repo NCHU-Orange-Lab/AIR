@@ -3,6 +3,10 @@
   python3 AIR/air.py check [檔案 ...] [--json]      快速檢查（不給檔案時檢查所有層）
   python3 AIR/air.py verify [--scope batch|final] [--json]
                                              正式驗收：架構檢查＋測試指令；結果綁定這一版程式碼，寫進 .air/verify.json
+  python3 AIR/air.py review [--base 分支] [--json]
+                                             語意審查的範圍：這次變更改到的層內檔案、各要對照哪些沒有程式檢查的規則（做法見 skill air-review）
+  python3 AIR/air.py review --result <檔案|-> [--base 分支]
+                                             交回審查結果（JSON）：驗證後寫進 .air/review.json；有 priority 0／1 的發現結束碼 1
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
                                              安裝接點（不指定 --host 時裝所有支援的宿主）
   python3 AIR/air.py uninstall [--purge]
@@ -16,7 +20,8 @@
                                              給 hook 使用（從 stdin 讀 JSON；宿主的差異見 lib/airkit/hosts.py）
   python3 AIR/air.py manifest                重新產生 AIR/MANIFEST.sha256（維護 AIR 時在開發 repo 用；裝好的專案裡不能用）
 
-結束碼：0 通過；1 沒通過（違規、驗收未通過、階段轉移被拒、doctor 有問題）；2 操作錯誤（找不到檔案、沒安裝、設定錯、測試指令跑不起來）
+結束碼：0 通過；1 沒通過（違規、驗收未通過、階段轉移被拒、doctor 有問題、審查有待處理的發現）；
+        2 操作錯誤（找不到檔案、沒安裝、設定錯、測試指令跑不起來、審查結果無效）
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ if sys.version_info < (3, 11):
 sys.dont_write_bytecode = True  # 不在使用者專案的 AIR/ 裡產生 __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import context, doctor, guard, hosts, install, integrity, project, protect, verify  # noqa: E402
+from airkit import context, doctor, guard, hosts, install, integrity, project, protect, review, verify  # noqa: E402
 from airkit.checks import EXIT, check, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -64,6 +69,31 @@ def cmd_verify(args) -> int:
     receipt = verify.verify(load(), args.scope)
     print(json.dumps(receipt, ensure_ascii=False, indent=2) if args.json else verify.format_receipt(receipt))
     return verify.exit_code(receipt)
+
+
+def cmd_review(args) -> int:
+    """沒有 --result：印出審查範圍。有 --result：驗證交回的結果，通過才記錄（無效＝2，有待處理的發現＝1）。"""
+    cfg = load()
+    sc = review.scope(cfg, args.base)
+    if args.result is None:
+        print(json.dumps(sc, ensure_ascii=False, indent=2) if args.json else review.format_scope(sc))
+        return 0
+    text = sys.stdin.read() if args.result == "-" else Path(args.result).read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        print(f"錯誤：審查結果不是 JSON（{e}）。格式見 skill air-review。", file=sys.stderr)
+        return 2
+    errors, findings = review.validate(sc, data)
+    if errors:
+        print("審查結果無效，沒有記錄：", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        print("修正後重新交回（格式見 skill air-review；範圍與規則編號用 python3 AIR/air.py review 查）。", file=sys.stderr)
+        return 2
+    rec = review.record(cfg, sc, data, findings)
+    print(json.dumps(rec, ensure_ascii=False, indent=2) if args.json else review.format_result(rec))
+    return review.exit_code(rec)
 
 
 def cmd_install(args) -> int:
@@ -244,6 +274,10 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("verify")
     p.add_argument("--scope", choices=verify.SCOPES, default="batch")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("review")
+    p.add_argument("--base", help="審整個分支：相對這個分支（或 commit）的 merge-base；預設相對 HEAD")
+    p.add_argument("--result", help="交回審查結果的 JSON 檔案；- 表示從 stdin 讀")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("install")
     p.add_argument("--package")
     p.add_argument("--package-dir")
@@ -268,7 +302,7 @@ def main(argv: list[str]) -> int:
     sub.add_parser("manifest")
     args = parser.parse_args(argv)
     handlers = {
-        "check": cmd_check, "verify": cmd_verify, "install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor,
+        "check": cmd_check, "verify": cmd_verify, "review": cmd_review, "install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor,
         "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "hook": cmd_hook,
         "manifest": cmd_manifest,
     }

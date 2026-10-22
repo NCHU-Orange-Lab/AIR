@@ -195,11 +195,15 @@ class TestFullInstall(ProjectTestCase):
         self.assertEqual((self.p.root / ".air" / "hosts").read_text(encoding="utf-8").split(), ["claude", "codex"])
         self.assertTrue((self.p.root / ".claude" / "skills" / "air-migrate" / ".air-managed").exists())
         self.assertTrue((self.p.root / ".agents" / "skills" / "air-migrate" / ".air-managed").exists())
+        for base in (".claude/skills", ".agents/skills"):  # air-review 連同 Codex 的介面設定與 schema 一起裝
+            self.assertTrue((self.p.root / base / "air-review" / "SKILL.md").exists(), base)
+            self.assertTrue((self.p.root / base / "air-review" / "agents" / "openai.yaml").exists(), base)
+            self.assertTrue((self.p.root / base / "air-review" / "schema.json").exists(), base)
         self.assertTrue((self.p.root / ".codex" / "hooks.json").exists())
         self.assertIn("信任", r.stdout)  # Codex 的 hook 要使用者信任
         self.assertTrue(os.access(self.p.root / ".git" / "hooks" / "pre-commit", os.X_OK))
         ignore = (self.p.root / ".air" / ".gitignore").read_text(encoding="utf-8").split()
-        for name in ("python", "hosts", "verify.json", "sessions"):
+        for name in ("python", "hosts", "verify.json", "review.json", "sessions"):
             self.assertIn(name, ignore)
         r2 = self.p.air("install")
         self.assertEqual(r2.returncode, 0)

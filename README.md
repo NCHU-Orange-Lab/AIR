@@ -17,7 +17,7 @@ steps/                         純邏輯（不碰 I/O、時間、亂數）
 contracts/                     跨層的型別與介面
 ```
 
-並且用程式強制執行：AI 每次編輯檔案、每次要結束工作、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 複製的 skill；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。
+並且用程式強制執行：AI 每次編輯檔案、每次要結束工作、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 複製的 skill；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。程式檢查不到的規則（例如 flow 不寫計算、adapter 關閉副作用），每批 commit 前由 AI 照 skill `air-review` 審查：`review` 指令用 git 界定這次的變更、列出要對照的規則，審查結果要通過格式與範圍的驗證才會被記錄。
 
 ## 怎麼開始
 
@@ -33,7 +33,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 2. 分析 | 盤點所有模組、確認測試指令、寫出每個模組該歸到哪一層 | 審閱 `docs/AIR-遷移報告.md` 的分析 |
 | 3. 計畫 | 把遷移切成數個批次 | 核准計畫 |
 | 4. 建立分層 | 建立空的各層目錄與規則 | 核准 |
-| 5. 逐批遷移 | 每一批：先補行為保護測試 → 搬移 → `verify`（測試＋架構檢查）通過 → commit | 每批結束時核准下一批 |
+| 5. 逐批遷移 | 每一批：先補行為保護測試 → 搬移 → `verify`（測試＋架構檢查）通過 → 語意審查（`air-review`）→ commit | 每批結束時核准下一批 |
 | 6. 收尾 | 移除過渡用的轉接，`verify --scope final` 通過 | 確認完成 |
 
 遷移期間，還沒搬進任何層的程式屬於「舊程式碼」，不受檢查，專案可以照常運作。
@@ -59,13 +59,14 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `AGENTS.md` | 標記區塊：`AIR/AGENTS.md` 的全文（常駐規則） | 是 |
 | `CLAUDE.md` | 標記區塊：匯入常駐規則（AIR 建立的匯入 `AGENTS.md`；你原有的匯入 `AIR/AGENTS.md`） | 是 |
 | `.claude/settings.json` | Claude Code 的六個 hook（session 開始、讀檔前、編輯前、編輯後、執行 Bash 前、結束前） | 是 |
-| `.claude/skills/air-*/` | 五個 skill（Claude Code） | 是 |
-| `.codex/hooks.json`、`.agents/skills/air-*/` | Codex 的五個 hook 與五個 skill | 是 |
+| `.claude/skills/air-*/` | 六個 skill（Claude Code） | 是 |
+| `.codex/hooks.json`、`.agents/skills/air-*/` | Codex 的五個 hook 與六個 skill | 是 |
 | `.air/project.toml` | 這個專案的設定：套件位置、測試指令、遷移階段 | 是 |
 | `.air/history.jsonl` | 每次階段轉移的紀錄（時間、commit、方式、原因） | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
 | `.air/sessions/` | hook 的注入紀錄（哪個 session 已附過哪一層的規則） | 否 |
 | `.air/verify.json` | 最近一次 `verify` 的結果，綁定當時的程式碼 | 否 |
+| `.air/review.json` | 最近一次語意審查的結果，綁定當時的變更 | 否 |
 | `docs/AIR-遷移報告.md` | AI 寫的分析、計畫與進度 | 是 |
 | commit 前檢查 | 有用 pre-commit 就加進 `.pre-commit-config.yaml`；沒有就裝 `.git/hooks/pre-commit` | `.git/hooks` 不進版本控制 |
 
@@ -85,6 +86,7 @@ python3 AIR/air.py status      # 套件、遷移階段、檢查範圍、違規�
 python3 AIR/air.py doctor      # 診斷接線：每個工具的 hook 與 skill、指引、套件完整性、commit 前檢查
 python3 AIR/air.py check       # 快速檢查所有層（加 --json 得到機器可讀的結果）
 python3 AIR/air.py verify      # 正式驗收：測試指令＋架構檢查，結果記在 .air/verify.json
+python3 AIR/air.py review      # 語意審查的範圍：這次變更改到的層內檔案、要對照哪些沒有程式檢查的規則（--result 交回結果）
 python3 AIR/air.py survey      # 盤點現有程式碼
 ```
 

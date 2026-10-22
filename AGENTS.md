@@ -30,7 +30,7 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 
 ## 永遠適用（只有這三條）
 
-1. 程式會在編輯後、結束前、commit 時被檢查。違規時**修改已經寫入檔案**，必須修正。訊息中有規則編號，依前綴讀 `AIR/rules/` 對應的規則：`CTR`→contracts、`STEP`→steps、`FLOW`→flows、`ADP`→adapters、`IO`→storage、`MAIN`→main、`TEST`→tests。檢查只涵蓋部分規則，**沒報錯不代表合規**。
+1. 程式會在編輯後、結束前、commit 時被檢查。違規時**修改已經寫入檔案**，必須修正。訊息中有規則編號，依前綴讀 `AIR/rules/` 對應的規則：`CTR`→contracts、`STEP`→steps、`FLOW`→flows、`ADP`→adapters、`IO`→storage、`MAIN`→main、`TEST`→tests。檢查只涵蓋部分規則，**沒報錯不代表合規**；其餘規則在每批 commit 前照 skill `air-review` 審查。
 2. 函式長度、複雜度的提醒（AIR101、AIR102）只是參考，不要為了消除提醒而拆函式。
 3. 新程式一律寫進對應的層。不確定該放哪一層、或規則之間互相衝突時，停下來問使用者，不要自行新增層、放寬白名單或修改 `AIR/`。
 
@@ -42,6 +42,7 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 
 - 檢查：`python3 AIR/air.py check`（只檢查層內的程式；「沒有檢查任何檔案」不等於通過）
 - 驗收：`python3 AIR/air.py verify`（測試指令＋架構檢查，結果綁定這一版程式碼；每批遷移結束、收尾前必須通過）
+- 語意審查：`python3 AIR/air.py review`（列出這次變更要對照哪些沒有程式檢查的規則；做法見 skill `air-review`）
 - 狀態：`python3 AIR/air.py status`；接線：`python3 AIR/air.py doctor`
 - 不要用 `--no-verify`、`-n`、`SKIP=` 或修改 `core.hooksPath` 來略過 commit 前的檢查；這些寫法也會被擋下
 
@@ -53,6 +54,7 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 | 新增或修改步驟、把步驟串進流程 | `air-add-step` |
 | 使用第三方工具或外部服務 | `air-wrap-tool` |
 | 收到函式長度或複雜度的提醒 | `air-split-function` |
+| 每批 commit 前依 AIR 規則審查變更（補程式檢查不到的規則） | `air-review` |
 | 想放寬或修改規範 | `air-maintain-rules` |
 
 hooks：session 開始與對話壓縮後附上目前狀態；第一次讀寫某一層的檔案時附上那一層的規則；編輯前擋下對 `AIR/`、hook 設定、AIR 複製的 skill 的修改，以及分析／計畫階段對 `.py` 的修改（改 `.air/project.toml` 會請使用者確認；Codex 沒有確認機制，改成提醒）；編輯 `.py` 後檢查該檔案；執行 Bash 前擋下略過檢查的指令；要結束前檢查所有層與套件完整性，有違規就要求繼續修正（只提醒一次）。

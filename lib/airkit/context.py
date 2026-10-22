@@ -12,8 +12,8 @@ import time
 from pathlib import Path
 
 from . import project
-from .checks import layer_of
 from .config import KIT_DIR, Config
+from .rules import name_for as rule_name  # noqa: F401 — 哪個檔案適用哪份規則，跟語意審查共用同一個判斷
 
 SESSIONS_DIR = Path(".air") / "sessions"
 KEEP_DAYS = 7  # 超過這麼久沒動的注入紀錄，session 開始時順便清掉
@@ -25,14 +25,6 @@ PHASE_GUIDE = {
     "migrating": "逐批遷移中（AIR/START.md 階段 5）：每批先補行為保護測試，verify 通過才 commit；每批結束停下來等核准。",
     "done": "遷移完成：新程式一律寫進對應的層，改到哪一層就照那一層的規則。",
 }
-
-
-def rule_name(path: Path, cfg: Config) -> str | None:
-    """這個檔案適用哪一份規則：層的名稱、tests，或 None（不在任何層）。"""
-    layer = layer_of(path, cfg)
-    if layer:
-        return layer.name
-    return "tests" if path.resolve().is_relative_to(cfg.tests_dir.resolve()) else None
 
 
 def rule_text(name: str) -> str:

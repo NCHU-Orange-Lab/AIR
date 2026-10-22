@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from . import install, verify
+from . import install, review, verify
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
@@ -186,6 +186,7 @@ def status_data(cfg: Config) -> dict:
     """狀態的結構化版本（status --json）；由目前的設定、檢查結果與驗收紀錄重新算，不信任任何摘要。"""
     report = check(cfg)
     receipt = verify.load_receipt(cfg.root)
+    reviewed = review.load_record(cfg.root)
     index = PHASES.index(cfg.phase) if cfg.phase in PHASES else -1
     return {
         "schema": "air.status.v1",
@@ -207,6 +208,11 @@ def status_data(cfg: Config) -> dict:
             "scope": receipt["scope"], "time": receipt["time"],
         },
         "last_verify_text": verify.describe(cfg, receipt),
+        "last_review": None if reviewed is None else {
+            "state": review.state(cfg, reviewed), "blocking": reviewed["blocking"], "findings": len(reviewed["findings"]),
+            "time": reviewed["time"],
+        },
+        "last_review_text": review.describe(cfg, reviewed),
     }
 
 
@@ -225,6 +231,7 @@ def status(cfg: Config) -> str:
         f"commit 前檢查：{d['commit_check']}",
         f"測試指令：{d['test_command'] or '（尚未設定）'}",
         f"最近驗收：{d['last_verify_text']}",
+        f"語意審查：{d['last_review_text']}",
     ]
     return "\n".join(lines)
 

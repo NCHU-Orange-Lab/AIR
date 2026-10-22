@@ -166,23 +166,31 @@ def verify(cfg: Config, scope: str = "batch") -> dict:
     return receipt
 
 
-def write_receipt(root: Path, receipt: dict) -> None:
-    path = root / RECEIPT_FILE
+def write_json(path: Path, data: dict) -> None:
+    """寫 .air/ 裡的紀錄：原子替換，中斷也不會留下半份。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)  # 原子替換：中斷也不會留下半份紀錄
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
 
 
-def load_receipt(root: Path) -> dict | None:
-    path = root / RECEIPT_FILE
+def load_json(path: Path, schema: str) -> dict | None:
+    """讀 .air/ 裡的紀錄；不存在、壞掉或 schema 不對都當成沒有。"""
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except ValueError:
         return None
-    return data if isinstance(data, dict) and data.get("schema") == SCHEMA else None
+    return data if isinstance(data, dict) and data.get("schema") == schema else None
+
+
+def write_receipt(root: Path, receipt: dict) -> None:
+    write_json(root / RECEIPT_FILE, receipt)
+
+
+def load_receipt(root: Path) -> dict | None:
+    return load_json(root / RECEIPT_FILE, SCHEMA)
 
 
 def receipt_state(cfg: Config, receipt: dict | None) -> str:
