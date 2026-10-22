@@ -5,6 +5,7 @@
 - 需求：Python 3.11 以上、git。不需要安裝任何套件。
 - 目前只支援 Python 專案。
 - 版本：見 `VERSION`
+- 套件自己的測試：`tests/`（只用標準庫，`python3 -m unittest discover -s tests -t .`）；GitHub 上每次 push 到 `main` 與 pull request 都會用 Python 3.11 到 3.14 跑一遍（`.github/workflows/test.yml`）。
 
 ## 這套規範在做什麼
 
