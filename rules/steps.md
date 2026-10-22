@@ -5,7 +5,7 @@
 - **STEP-1【必須】** 只能 import 白名單內的外部模組（標準庫的純計算模組、pandas、numpy，以及專案在 `.air/project.toml` 加入的模組），內部只能 import steps 與 `contracts.types`。〔hook 檢查〕
 - **STEP-2【必須】** 不做 I/O：不讀寫檔案（包括 `df.to_csv()`、`path.write_text()` 這類方法）、不呼叫網路、不 `print`、不寫 log。不接收 Protocol（無法 import `contracts.ports`）。〔hook 部分檢查：沒有型別標註、直接當參數傳進來的工具物件抓不到〕
 - **STEP-3【必須】** 不直接讀時間、亂數、環境變數，需要時由參數傳入。`df.sample()` 必須傳入 `random_state`，`default_rng()` 必須傳入 seed。〔hook 部分檢查：其他函式庫自己的取時間、取亂數方法抓不到〕
-- **STEP-4【必須】** 參數與回傳值都要有型別標註；跨層傳遞的資料型別定義在 `contracts/types.py`，不回傳第三方物件。
+- **STEP-4【必須】** 參數與回傳值都要有型別標註；跨層傳遞的資料型別定義在 `contracts/types.py`，不回傳白名單外的第三方物件（白名單同 STEP-1）。
 - **STEP-5【建議】** 不修改傳入的參數，回傳新物件（DataFrame 用 `.copy()`，或直接回傳新的）。
 - **STEP-6【建議】** 用結果命名（`valid_orders`），不用動作流程命名（`process_data`）。
 

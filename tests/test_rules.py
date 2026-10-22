@@ -3,6 +3,7 @@
 這裡的數字就是現行規則的清單：改規則檔時要一起改，標記誇大（把沒檢查的寫成〔hook 檢查〕）會讓那條規則從審查消失。
 """
 
+import re
 import tomllib
 import unittest
 
@@ -26,6 +27,18 @@ class TestCurrentRules(unittest.TestCase):
         self.assertEqual({r.id for r in self.all if r.checked == rules.PARTIAL}, PARTIALLY_CHECKED)
         self.assertEqual(sum(r.checked == rules.NONE for r in self.all), 26)
         self.assertEqual(sum(len(rules.for_review(name)) for name in COUNTS), 29)  # 26 條沒檢查＋3 條部分檢查
+
+    def test_docs_quote_current_counts(self):
+        # 設計說明與 review.py 的 docstring 引用規則的數量：改規則檔時容易忘了同步，所以從規則檔算出來核對
+        total = len(self.all)
+        full = sum(r.checked == rules.FULL for r in self.all)
+        partial = sum(r.checked == rules.PARTIAL for r in self.all)
+        none = total - full - partial
+        sentence = f"{total} 條規則裡只有 {full + partial} 條有程式檢查（{full} 條完整、{partial} 條部分）"
+        design = (KIT / "docs" / "設計說明.md").read_text(encoding="utf-8")
+        self.assertIn(sentence, design)
+        self.assertIn(sentence, (KIT / "lib" / "airkit" / "review.py").read_text(encoding="utf-8"))
+        self.assertEqual(re.findall(r"(\d+) 條規則沒有程式檢查", design), [str(none)])
 
     def test_same_layer_import_rules_match_config(self):
         # ADP-6、IO-4 說「同層可以、不能循環」：config 要真的允許同層 import，而且開著循環檢查、訊息指回這條規則

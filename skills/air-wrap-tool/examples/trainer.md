@@ -12,7 +12,7 @@
     predictor.py                  推論，實作 contracts/ports.py 的 Predictor
 <套件目錄>/steps/metrics.py       numpy 版指標：純函式，測試不需要 GPU
 <套件目錄>/flows/evaluate.py      呼叫注入的 Predictor，結果交給 steps
-<套件目錄>/main/__main__.py       train()、evaluate() 各一個函式（MAIN-4）
+<套件目錄>/main/__main__.py       train_model()、evaluate_model() 各一個函式（MAIN-4）
 ```
 
 ## 1. 型別與介面
