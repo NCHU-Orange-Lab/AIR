@@ -17,7 +17,7 @@ steps/                         純邏輯（不碰 I/O、時間、亂數）
 contracts/                     跨層的型別與介面
 ```
 
-並且用程式強制執行：AI 每次編輯檔案、每次要結束工作、每次 commit 時都會被檢查，違規時會收到規則編號和修法。
+並且用程式強制執行：AI 每次編輯檔案、每次要結束工作、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 產生的規則檔；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。
 
 ## 怎麼開始
 
@@ -46,7 +46,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 |---|---|---|
 | `AIR/` | 這個套件 | 是 |
 | `CLAUDE.md`、`AGENTS.md` | 各加一個標記區塊，指向 `AIR/AGENTS.md` | 是 |
-| `.claude/settings.json` | 三個 hook（編輯後、執行 Bash 前、結束前） | 是 |
+| `.claude/settings.json` | 四個 hook（編輯前、編輯後、執行 Bash 前、結束前） | 是 |
 | `.claude/skills/air-*/` | 五個 skill | 是 |
 | `.air/project.toml` | 這個專案的設定：套件位置、測試指令、遷移階段 | 是 |
 | `.air/history.jsonl` | 每次階段轉移的紀錄（時間、commit、方式、原因） | 是 |

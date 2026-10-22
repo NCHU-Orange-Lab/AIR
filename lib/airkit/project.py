@@ -7,16 +7,15 @@ import json
 import re
 from pathlib import Path
 
-from . import verify
+from . import install, verify
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source
-from .config import KIT_DIR, PROJECT_FILE, Config
+from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
 
 STDLIB_IO = {"os", "io", "pathlib", "shutil", "sys", "subprocess", "socket", "logging", "random", "time",
              "urllib", "http", "sqlite3", "pickle", "csv", "tempfile", "glob", "argparse"}
 
 PHASES = ["installed", "analyzed", "planned", "layered", "migrating", "done"]
-REPORT_FILE = Path("docs") / "AIR-遷移報告.md"
 HISTORY_FILE = Path(".air") / "history.jsonl"  # 每次階段轉移一行：時間、從哪到哪、commit、方式、原因
 
 
@@ -200,6 +199,8 @@ def status_data(cfg: Config) -> dict:
         "allow_legacy": len(cfg.allow_legacy),
         "violations": len(report.hard),
         "warnings": len(report.soft),
+        "integrity": [v.format(cfg.root) for v in report.hard if v.code == "AIR009"],
+        "commit_check": install.commit_check_status(cfg.root),
         "test_command": cfg.test_command,
         "last_verify": None if receipt is None else {
             "state": verify.receipt_state(cfg, receipt), "accepted": receipt["accepted"],
@@ -211,6 +212,8 @@ def status_data(cfg: Config) -> dict:
 
 def status(cfg: Config) -> str:
     d = status_data(cfg)
+    problems = d["integrity"]
+    integrity_line = "正常" if not problems else f"{len(problems)} 個問題（AIR009，見 python3 AIR/air.py check）"
     lines = [
         f"套件：{d['package']}（{d['package_dir']}）",
         f"遷移階段：{d['phase']}（{' → '.join(PHASES)}）",
@@ -218,6 +221,8 @@ def status(cfg: Config) -> str:
         f"檢查範圍：層內 {d['checked_files']} 個檔案；舊程式碼模組 {d['legacy_modules']} 個（不檢查）",
         f"暫時允許的舊模組 import：{d['allow_legacy']}",
         f"違規：{d['violations']}　提醒：{d['warnings']}",
+        f"套件完整性：{integrity_line}",
+        f"commit 前檢查：{d['commit_check']}",
         f"測試指令：{d['test_command'] or '（尚未設定）'}",
         f"最近驗收：{d['last_verify_text']}",
     ]

@@ -10,7 +10,9 @@
   python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
   python3 AIR/air.py phase <階段> [--rollback|--force] [--reason 原因]
                                              推進遷移階段（一次一格，會檢查前置條件；退回或強制要寫原因）
-  python3 AIR/air.py hook <post-edit|pre-bash|stop>   給 hook 使用（從 stdin 讀 JSON；接受 Claude Code 與 Codex 的 payload）
+  python3 AIR/air.py hook <pre-edit|post-edit|pre-bash|stop>
+                                             給 hook 使用（從 stdin 讀 JSON；接受 Claude Code 與 Codex 的 payload）
+  python3 AIR/air.py manifest                重新產生 AIR/MANIFEST.sha256（維護 AIR 時在開發 repo 用；裝好的專案裡不能用）
 
 結束碼：0 通過；1 沒通過（違規、驗收未通過、階段轉移被拒）；2 操作錯誤（找不到檔案、沒安裝、設定錯、測試指令跑不起來）
 """
@@ -29,9 +31,9 @@ if sys.version_info < (3, 11):
 sys.dont_write_bytecode = True  # 不在使用者專案的 AIR/ 裡產生 __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import guard, install, project, verify  # noqa: E402
-from airkit.checks import EXIT, check  # noqa: E402
-from airkit.config import ConfigError, load, project_root  # noqa: E402
+from airkit import guard, install, integrity, project, protect, verify  # noqa: E402
+from airkit.checks import EXIT, check, rel  # noqa: E402
+from airkit.config import PROJECT_FILE, ConfigError, load, project_root  # noqa: E402
 
 FIX_HINT = "依訊息中的規則編號讀對應層的 CLAUDE.md 後修正（前綴對照見 AIR/AGENTS.md）。"
 
@@ -102,6 +104,15 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_manifest(args) -> int:
+    if (project_root() / PROJECT_FILE).exists():
+        print("錯誤：manifest 是維護 AIR 時用的指令（在 AIR 的開發 repo 執行）。裝好的專案裡不能重新產生，否則完整性檢查就沒有意義。", file=sys.stderr)
+        return 2
+    n = integrity.write_manifest()
+    print(f"已寫入 AIR/MANIFEST.sha256（{n} 個檔案）")
+    return 0
+
+
 def cmd_phase(args) -> int:
     try:
         lines = project.transition(load(), args.phase, rollback=args.rollback, force=args.force, reason=args.reason)
@@ -131,6 +142,27 @@ def edited_files(payload: dict) -> list[Path]:
     else:
         names = PATCH_FILE.findall(tool_input.get("command", ""))
     return [(base / name.strip()).resolve() for name in names]  # 絕對路徑時 base / name 就是 name
+
+
+def hook_pre_edit(payload: dict) -> int:
+    """編輯前：受保護路徑擋下（exit 2，檔案還沒被改到）；.air/project.toml 改成請使用者確認。"""
+    paths = edited_files(payload)
+    if not paths:
+        return 0
+    cfg = load()
+    decisions = [(p, protect.classify(p, cfg)) for p in paths]
+    denied = [(p, d) for p, d in decisions if d.action == protect.DENY]
+    if denied:
+        print("【AIR 擋下這次修改，檔案沒有被改到】", file=sys.stderr)
+        for p, d in denied:
+            print(f"{rel(p, cfg.root)}：{d.reason}", file=sys.stderr)
+        return 2
+    asks = [(p, d) for p, d in decisions if d.action == protect.ASK]
+    if asks:
+        reason = "；".join(f"{rel(p, cfg.root)}：{d.reason}" for p, d in asks)
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                                                 "permissionDecisionReason": reason}}, ensure_ascii=False))
+    return 0
 
 
 def hook_post_edit(payload: dict) -> int:
@@ -176,7 +208,8 @@ def hook_stop(payload: dict) -> int:
 def cmd_hook(args) -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
-        return {"post-edit": hook_post_edit, "pre-bash": hook_pre_bash, "stop": hook_stop}[args.event](payload)
+        handlers = {"pre-edit": hook_pre_edit, "post-edit": hook_post_edit, "pre-bash": hook_pre_bash, "stop": hook_stop}
+        return handlers[args.event](payload)
     except ConfigError:
         return 0  # 還沒安裝完成（沒有 .air/project.toml）時，hook 不做任何事
     except Exception as e:  # noqa: BLE001 — hook 自己的錯誤不能變成 AI 的程式違規，也不擋住工作；commit 前檢查仍會把關
@@ -209,11 +242,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("--force", action="store_true", help="略過前置條件（要加 --reason；會記錄）")
     p.add_argument("--reason", default="")
     p = sub.add_parser("hook")
-    p.add_argument("event", choices=["post-edit", "pre-bash", "stop"])
+    p.add_argument("event", choices=["pre-edit", "post-edit", "pre-bash", "stop"])
+    sub.add_parser("manifest")
     args = parser.parse_args(argv)
     handlers = {
         "check": cmd_check, "verify": cmd_verify, "install": cmd_install, "uninstall": cmd_uninstall,
         "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "hook": cmd_hook,
+        "manifest": cmd_manifest,
     }
     try:
         return handlers[args.cmd](args)

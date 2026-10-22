@@ -2,7 +2,7 @@
 
 建立的接點：
   CLAUDE.md、AGENTS.md          加入一個標記區塊
-  .claude/settings.json          加入三個 hook
+  .claude/settings.json          加入四個 hook（編輯前、編輯後、執行 Bash 前、結束前）
   .claude/skills/air-*/          從 AIR/skills 複製（含 .air-managed 標記）
   commit 前檢查                  .pre-commit-config.yaml 加區塊，或 .git/hooks/pre-commit
   .air/project.toml、.air/python 專案設定（移除時保留，除非 --purge）
@@ -29,6 +29,7 @@ FAILED = "失敗："  # 安裝結果中失敗項目的前綴（air.py 用它判�
 # (事件, matcher, 腳本, timeout 秒)
 HOOKS = [
     ("PreToolUse", "Bash", "pre_bash.sh", 30),
+    ("PreToolUse", "Edit|Write|MultiEdit", "pre_edit.sh", 30),
     ("PostToolUse", "Edit|Write|MultiEdit", "post_edit.sh", 60),
     ("Stop", None, "stop.sh", 120),
 ]
@@ -344,6 +345,19 @@ def ensure_commit_check(root: Path) -> str:
     hook.write_text(f"#!/bin/sh\n# {MANAGED} 由 AIR 安裝；移除請執行 AIR/uninstall.sh\nexec sh AIR/hooks/commit_check.sh\n", encoding="utf-8")
     hook.chmod(0o755)
     return ".git/hooks/pre-commit：已安裝（git hook 不會進版本控制，每個 clone 都要執行一次 AIR/install.sh）"
+
+
+def commit_check_status(root: Path) -> str:
+    """給 status 看：commit 前檢查裝在哪裡。"""
+    config = root / ".pre-commit-config.yaml"
+    if config.exists() and BEGIN in config.read_text(encoding="utf-8", errors="replace"):
+        return "pre-commit（.pre-commit-config.yaml）"
+    if git_toplevel(root) is None:
+        return "不是 git repo"
+    hook = git_hook_path(root)
+    if hook.exists() and MANAGED in hook.read_text(encoding="utf-8", errors="replace"):
+        return "git hook（.git/hooks/pre-commit）"
+    return "未安裝（執行 sh AIR/install.sh）"
 
 
 def remove_commit_check(root: Path) -> str:

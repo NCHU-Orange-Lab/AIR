@@ -8,7 +8,8 @@ import unittest
 from tests.helpers import ProjectTestCase
 from airkit import install
 
-HOOK_SCRIPTS = ["pre_bash.sh", "post_edit.sh", "stop.sh"]
+HOOK_SCRIPTS = ["pre_bash.sh", "pre_edit.sh", "post_edit.sh", "stop.sh"]
+EXPECTED_HOOKS = [("PreToolUse", "Bash"), ("PreToolUse", "Edit|Write|MultiEdit"), ("PostToolUse", "Edit|Write|MultiEdit"), ("Stop", None)]
 
 
 class TestInstructions(ProjectTestCase):
@@ -60,10 +61,10 @@ class TestSettings(ProjectTestCase):
         return [(event, entry.get("matcher"), h["command"]) for event, entries in data.get("hooks", {}).items()
                 for entry in entries for h in entry["hooks"] if "AIR/hooks/" in h["command"]]
 
-    def test_three_hooks_with_matchers_and_timeouts(self):
+    def test_four_hooks_with_matchers_and_timeouts(self):
         install.ensure_settings(self.p.root)
         hooks = self.air_hooks(self.settings())
-        self.assertEqual([(e, m) for e, m, _ in hooks], [("PreToolUse", "Bash"), ("PostToolUse", "Edit|Write|MultiEdit"), ("Stop", None)])
+        self.assertEqual([(e, m) for e, m, _ in hooks], EXPECTED_HOOKS)
         for entries in self.settings()["hooks"].values():
             for entry in entries:
                 for h in entry["hooks"]:
@@ -72,7 +73,7 @@ class TestSettings(ProjectTestCase):
     def test_idempotent(self):
         self.assertEqual(install.ensure_settings(self.p.root), "updated")
         self.assertEqual(install.ensure_settings(self.p.root), "unchanged")
-        self.assertEqual(len(self.air_hooks(self.settings())), 3)
+        self.assertEqual(len(self.air_hooks(self.settings())), len(EXPECTED_HOOKS))
 
     def test_user_hook_mentioning_air_is_not_mistaken_for_ours(self):
         # 子字串比對會把使用者的 echo 當成 AIR 的 hook（F09）
@@ -91,7 +92,7 @@ class TestSettings(ProjectTestCase):
         old = {"matcher": "Bash", "hooks": [{"type": "command", "command": '"$CLAUDE_PROJECT_DIR"/AIR/hooks/pre_bash.sh'}]}
         self.p.write(".claude/settings.json", json.dumps({"hooks": {"PreToolUse": [old]}}))
         install.ensure_settings(self.p.root)
-        pre = [h for e in self.settings()["hooks"]["PreToolUse"] for h in e["hooks"]]
+        pre = [h for e in self.settings()["hooks"]["PreToolUse"] for h in e["hooks"] if "pre_bash" in h["command"]]
         self.assertEqual(len(pre), 1)
         self.assertTrue(pre[0]["command"].startswith("sh "))
 
@@ -115,7 +116,7 @@ class TestHookScripts(ProjectTestCase):
     def test_generated_commands_run_without_exec_bit(self):
         data = json.loads((self.p.root / ".claude" / "settings.json").read_text(encoding="utf-8"))
         commands = [h["command"] for entries in data["hooks"].values() for e in entries for h in e["hooks"]]
-        self.assertEqual(len(commands), 3)
+        self.assertEqual(len(commands), len(EXPECTED_HOOKS))
         for cmd in commands:
             with self.subTest(cmd=cmd):
                 r = self.p.sh(cmd, stdin="{}", env={"CLAUDE_PROJECT_DIR": str(self.p.root)})

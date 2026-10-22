@@ -4,6 +4,7 @@
   AIR000 無法解析        AIR001 禁用的內建函式    AIR002 外部 import 不在白名單
   AIR003 層內循環 import  AIR004 禁用的方法名稱    AIR005 缺少必要參數
   AIR006 禁用的函式      AIR007 跨層方向錯誤      AIR008 import 尚未遷移的舊模組
+  AIR009 AIR 套件或接點被修改（只在全專案檢查時，見 integrity.py）
 軟規則（只提醒）：
   AIR101 函式語句過多    AIR102 函式過於複雜
 """
@@ -15,6 +16,7 @@ import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import integrity
 from .config import Config, Layer
 from .metrics import complexity, functions, statements
 from .pyast import call_name, has_required_arg, import_targets, matches, qualified, scoped_calls
@@ -292,6 +294,8 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
         if cfg.package_dir.is_dir():
             report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None]
+        for path, detail in integrity.problems(cfg.root):  # 套件與接點被動過，最晚在這裡（結束前、commit 前）抓到
+            report.hard.append(Violation(path, 1, 1, "AIR009", f"AIR 套件或接點被修改：{detail}。{integrity.FIX}"))
     else:
         targets = []
         for p in paths:

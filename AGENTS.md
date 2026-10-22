@@ -55,4 +55,4 @@ contracts/                     跨層的型別（types.py）與介面（ports.py
 | 收到函式長度或複雜度的提醒 | `air-split-function` |
 | 想放寬或修改規範 | `air-maintain-rules` |
 
-hooks：編輯 `.py` 後檢查該檔案；執行 Bash 前擋下略過檢查的指令；要結束前檢查所有層，有違規就要求繼續修正（只提醒一次）。
+hooks：編輯前擋下對 `AIR/`、hook 設定、AIR 產生的規則檔與 skill 的修改，以及分析／計畫階段對 `.py` 的修改（改 `.air/project.toml` 會請使用者確認）；編輯 `.py` 後檢查該檔案；執行 Bash 前擋下略過檢查的指令；要結束前檢查所有層與套件完整性，有違規就要求繼續修正（只提醒一次）。
