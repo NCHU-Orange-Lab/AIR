@@ -4,9 +4,10 @@
   CLAUDE.md                      標記區塊：AIR 自己建立的 CLAUDE.md 匯入 AGENTS.md；使用者原有的 CLAUDE.md 匯入 AIR/AGENTS.md
   AGENTS.md                      標記區塊：AIR/AGENTS.md 的全文（Codex 等工具只讀本文，不處理 @ 匯入）
   每個宿主的 hook 設定與 skills    Claude Code：.claude/settings.json、.claude/skills/；Codex：.codex/hooks.json、.agents/skills/（見 hosts.py）
+  路徑規則（有 rules_dir 的宿主）   Claude Code：.claude/rules/air-<層>.md，AIR/rules/<層>.md 的複本加 paths 前言；讀寫該層時由宿主自己載入
   commit 前檢查                  .pre-commit-config.yaml 加區塊，或 .git/hooks/pre-commit
   .air/project.toml、.air/python 專案設定（移除時保留，除非 --purge）
-舊版放在各層目錄的 CLAUDE.md 會被移除：各層規則改由 hook 在第一次讀寫該層時注入（見 context.py）。
+舊版放在各層目錄的 CLAUDE.md 會被移除；2.6.1 以前 Claude Code 讀檔前的 hook 會被換掉：各層規則改由 .claude/rules 載入（Codex 仍由 hook 注入，見 context.py）。
 """
 
 from __future__ import annotations
@@ -340,6 +341,92 @@ def remove_skills(root: Path, host: hosts.Host) -> list[str]:
     return removed
 
 
+# ── 路徑規則（宿主內建的按路徑載入；目前是 Claude Code 的 .claude/rules）──
+# 規則只有 AIR/rules/ 一個來源：安裝時複製成 air-<層>.md，前面加 paths 前言（宿主只在讀寫符合的檔案時載入）。
+# 取代原本每次 Read 都啟動一個 Python 的 pre_read hook。檔案帶 AIR:MANAGED 標記，只動自己建立的。
+
+PATH_RULES_PREFIX = "air-"
+
+
+def rule_names() -> list[str]:
+    """規則檔的名稱：各層與 tests（AIR/rules/*.md）。"""
+    return sorted(p.stem for p in (KIT_DIR / "rules").glob("*.md"))
+
+
+def rule_globs(cfg: Config, name: str) -> list[str]:
+    """這份規則適用的檔案：層的目錄（含子套件）或測試目錄底下的 .py，相對專案根目錄的 glob。"""
+    base = cfg.tests_dir if name == "tests" else cfg.layers[name].path
+    return [f"{base.relative_to(cfg.root).as_posix()}/**/*.py"]
+
+
+def path_rule_text(cfg: Config, name: str) -> str:
+    paths = "\n".join(f'  - "{g}"' for g in rule_globs(cfg, name))
+    body = (KIT_DIR / "rules" / f"{name}.md").read_text(encoding="utf-8").strip()
+    return (f"---\npaths:\n{paths}\n---\n"
+            f"<!-- {MANAGED} 由 AIR/install.sh 產生（AIR/rules/{name}.md 的複本，paths 指向該層），請勿手動修改；更新 AIR 時會覆蓋 -->\n"
+            f"{body}\n")
+
+
+def path_rule_file(root: Path, host: hosts.Host, name: str) -> Path:
+    return root / host.rules_dir / f"{PATH_RULES_PREFIX}{name}.md"
+
+
+def is_managed_path_rule(path: Path) -> bool:
+    """AIR 產生的路徑規則檔：存在而且帶標記（使用者自己放在同一個目錄的檔案不算）。"""
+    return path.is_file() and MANAGED in path.read_text(encoding="utf-8", errors="replace")
+
+
+def ensure_path_rules(root: Path, host: hosts.Host, cfg: Config) -> list[str]:
+    """寫入或更新每一份規則檔；不是 AIR 建立的同名檔案略過。回傳安裝結果的說明。"""
+    if not host.rules_dir:
+        return []
+    done: dict[str, list[str]] = {"created": [], "updated": [], "unchanged": []}
+    skipped = []
+    for name in rule_names():
+        dest = path_rule_file(root, host, name)
+        if dest.exists() and not is_managed_path_rule(dest):
+            skipped.append(f"略過 {dest.relative_to(root).as_posix()}：已經存在，而且不是 AIR 建立的")
+            continue
+        text = path_rule_text(cfg, name)
+        if not dest.exists():
+            status = "created"
+        else:
+            status = "unchanged" if dest.read_text(encoding="utf-8") == text else "updated"
+        if status != "unchanged":
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text, encoding="utf-8")
+        done[status].append(dest.name)
+    summary = "、".join(f"{k} {len(v)}" for k, v in done.items() if v) or "無"
+    return [f"{host.rules_dir.as_posix()}/：各層規則 {summary}（讀寫該層的檔案時由 {host.label} 自動載入）"] + skipped
+
+
+def remove_path_rules(root: Path, host: hosts.Host) -> list[str]:
+    if not host.rules_dir:
+        return []
+    base = root / host.rules_dir
+    removed = []
+    for p in sorted(base.glob(f"{PATH_RULES_PREFIX}*.md")) if base.is_dir() else []:
+        if is_managed_path_rule(p):
+            p.unlink()
+            removed.append(p.relative_to(root).as_posix())
+    _prune_empty_dirs(base, root)
+    return removed
+
+
+def path_rules_status(root: Path, host: hosts.Host, cfg: Config) -> tuple[list[str], list[str], list[str]]:
+    """(缺少, 不是 AIR 建立的, 不是目前版本) 的規則檔名稱；給 doctor 用。"""
+    missing, foreign, stale = [], [], []
+    for name in rule_names():
+        dest = path_rule_file(root, host, name)
+        if not dest.exists():
+            missing.append(dest.name)
+        elif not is_managed_path_rule(dest):
+            foreign.append(dest.name)
+        elif dest.read_text(encoding="utf-8") != path_rule_text(cfg, name):
+            stale.append(dest.name)
+    return missing, foreign, stale
+
+
 # ── 舊版的規則檔 ──
 
 def remove_rules(cfg: Config) -> list[str]:
@@ -450,6 +537,8 @@ def install(root: Path, package: str | None, package_dir: str | None, host_names
     for host in selected:
         steps.append((host.hooks_file.as_posix(), lambda h=host: [f"{h.hooks_file.as_posix()}：{ensure_hooks(root, h)}"] + ([f"注意：{h.note}"] if h.note else [])))
         steps.append((host.skills_dir.as_posix(), lambda h=host: _skill_lines(root, h)))
+        if host.rules_dir:
+            steps.append((host.rules_dir.as_posix(), lambda h=host: ensure_path_rules(root, h, load(root))))
     steps += [
         ("commit 前檢查", lambda: [ensure_commit_check(root)] if git_toplevel(root) else []),
         ("舊版規則檔", lambda: [f"移除 {r}（舊版的規則檔；規則改由 hook 注入）" for r in remove_rules(load(root))]),
@@ -477,6 +566,7 @@ def uninstall(root: Path, purge: bool) -> list[str]:
         if remove_hooks(root, host):
             lines.append(f"移除 {host.hooks_file.as_posix()} 的 hook")
         lines += [f"移除 skill {s}" for s in remove_skills(root, host)]
+        lines += [f"移除 {r}" for r in remove_path_rules(root, host)]
     removed = remove_commit_check(root)
     if removed:
         lines.append(f"移除 {removed} 的 commit 前檢查")

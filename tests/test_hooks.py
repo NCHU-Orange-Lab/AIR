@@ -131,9 +131,9 @@ class TestEncoding(ProjectTestCase):
         super().setUp()
         self.p.layer("steps")
 
-    def raw(self, event: str, payload: dict) -> subprocess.CompletedProcess:
+    def raw(self, event: str, payload: dict, *args: str) -> subprocess.CompletedProcess:
         """直接執行 air.py，拿原始位元組（不先解碼），環境模擬 cp950。"""
-        return subprocess.run([sys.executable, str(self.p.root / "AIR" / "air.py"), "hook", event],
+        return subprocess.run([sys.executable, str(self.p.root / "AIR" / "air.py"), "hook", event, *args],
                               input=json.dumps(payload, ensure_ascii=False).encode("utf-8"), capture_output=True,
                               cwd=self.p.root, env={**os.environ, **self.CP950})
 
@@ -149,8 +149,8 @@ class TestEncoding(ProjectTestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         out = json.loads(r.stdout.decode("utf-8"))  # 不是 UTF-8、不是 JSON 都會丟例外
         self.assertIn("遷移階段：migrating", out["hookSpecificOutput"]["additionalContext"])
-        payload = {"session_id": "s1", "tool_name": "Read", "tool_input": {"file_path": str(self.p.root / "demo" / "steps" / "a.py")}}
-        r = self.raw("pre-read", payload)
+        payload = {"session_id": "s1", "tool_name": "apply_patch", "tool_input": {"file_path": str(self.p.root / "demo" / "steps" / "a.py")}}
+        r = self.raw("pre-edit", payload, "--host", "codex")  # 規則注入（Codex）：中文規則要原樣送到
         self.assertIn("STEP-1", json.loads(r.stdout.decode("utf-8"))["hookSpecificOutput"]["additionalContext"])
 
     def test_violation_message_is_readable_under_cp950(self):

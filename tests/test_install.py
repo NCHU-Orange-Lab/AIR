@@ -11,9 +11,10 @@ from pathlib import Path
 from tests.helpers import ProjectTestCase
 from airkit import hosts, install
 
-HOOK_SCRIPTS = ["session_start.sh", "pre_bash.sh", "pre_read.sh", "pre_edit.sh", "post_edit.sh", "stop.sh"]
-EXPECTED_HOOKS = [("SessionStart", None), ("PreToolUse", "Bash"), ("PreToolUse", "Read"), ("PreToolUse", "Edit|Write|MultiEdit"),
+HOOK_SCRIPTS = ["session_start.sh", "pre_bash.sh", "pre_edit.sh", "post_edit.sh", "stop.sh"]
+EXPECTED_HOOKS = [("SessionStart", None), ("PreToolUse", "Bash"), ("PreToolUse", "Edit|Write|MultiEdit"),
                   ("PostToolUse", "Edit|Write|MultiEdit"), ("Stop", None)]
+RULE_FILES = [f"air-{n}.md" for n in ("adapters", "contracts", "flows", "main", "steps", "storage", "tests")]
 
 
 class TestInstructions(ProjectTestCase):
@@ -89,7 +90,7 @@ class TestSettings(ProjectTestCase):
         return [(event, entry.get("matcher"), h["command"]) for event, entries in data.get("hooks", {}).items()
                 for entry in entries for h in entry["hooks"] if "AIR/hooks/" in h["command"]]
 
-    def test_six_hooks_with_matchers_timeouts_and_host_argument(self):
+    def test_five_hooks_with_matchers_timeouts_and_host_argument(self):
         install.ensure_hooks(self.p.root, hosts.CLAUDE)
         hooks_ = self.air_hooks(self.settings())
         self.assertEqual([(e, m) for e, m, _ in hooks_], EXPECTED_HOOKS)
@@ -134,6 +135,73 @@ class TestSettings(ProjectTestCase):
         install.ensure_hooks(self.p.root, hosts.CLAUDE)
         install.remove_hooks(self.p.root, hosts.CLAUDE)
         self.assertFalse((self.p.root / ".claude" / "settings.json").exists())
+
+    def test_retired_read_hook_from_an_older_install_is_replaced(self):
+        # 2.6.1 以前裝的 settings.json 有 pre_read.sh：重新安裝要把它拿掉，不能當成使用者的 hook 留著
+        old = {"matcher": "Read", "hooks": [{"type": "command", "command": hosts.hook_command(hosts.CLAUDE, "pre_read.sh"), "timeout": 30}]}
+        self.p.write(".claude/settings.json", json.dumps({"hooks": {"PreToolUse": [old]}}))
+        data = install.read_hooks(self.p.root / ".claude" / "settings.json")
+        self.assertTrue(install.is_air_hook(old["hooks"][0]))
+        self.assertIn("pre_read.sh", install.stale_hooks(data, hosts.CLAUDE))
+        self.assertEqual(install.ensure_hooks(self.p.root, hosts.CLAUDE), "updated")
+        commands = [c for _, _, c in self.air_hooks(self.settings())]
+        self.assertFalse(any("pre_read" in c for c in commands))
+        self.assertEqual(len(commands), len(EXPECTED_HOOKS))
+
+
+class TestPathRules(ProjectTestCase):
+    """Claude Code 的各層規則：.claude/rules/air-<層>.md，AIR/rules/<層>.md 的複本加 paths 前言，由宿主在讀寫該層時自己載入。"""
+
+    def rules_dir(self):
+        return self.p.root / ".claude" / "rules"
+
+    def test_written_with_paths_frontmatter_marker_and_rule_text(self):
+        out = install.ensure_path_rules(self.p.root, hosts.CLAUDE, self.p.cfg())
+        self.assertEqual(sorted(p.name for p in self.rules_dir().iterdir()), RULE_FILES)
+        self.assertIn(".claude/rules/：各層規則 created 7", out[0])
+        steps = (self.rules_dir() / "air-steps.md").read_text(encoding="utf-8")
+        self.assertTrue(steps.startswith('---\npaths:\n  - "demo/steps/**/*.py"\n---\n'), steps[:80])  # 含子套件
+        self.assertIn(install.MANAGED, steps.splitlines()[4])
+        self.assertIn("# steps/ 規則", steps)
+        self.assertIn("**STEP-1【必須】**", steps)
+        self.assertEqual(steps.count("---\n"), 2)
+        tests = (self.rules_dir() / "air-tests.md").read_text(encoding="utf-8")
+        self.assertIn('  - "tests/**/*.py"', tests)
+        self.assertIn("TEST-1", tests)
+        self.assertIn("unchanged 7", install.ensure_path_rules(self.p.root, hosts.CLAUDE, self.p.cfg())[0])
+        self.assertEqual(install.ensure_path_rules(self.p.root, hosts.CODEX, self.p.cfg()), [])  # Codex 沒有路徑規則
+
+    def test_globs_follow_the_package_dir(self):
+        self.p.write(".air/project.toml", (self.p.root / ".air" / "project.toml").read_text(encoding="utf-8").replace('package-dir = "demo"', 'package-dir = "src/demo"'))
+        self.assertEqual(install.rule_globs(self.p.cfg(), "adapters"), ["src/demo/adapters/**/*.py"])
+        self.assertEqual(install.rule_globs(self.p.cfg(), "tests"), ["tests/**/*.py"])
+
+    def test_stale_copy_is_refreshed_but_foreign_file_is_kept(self):
+        install.ensure_path_rules(self.p.root, hosts.CLAUDE, self.p.cfg())
+        steps = self.rules_dir() / "air-steps.md"
+        steps.write_text(steps.read_text(encoding="utf-8").replace("STEP-1", "STEP-9"), encoding="utf-8")  # 舊版的複本（仍有標記）
+        self.p.write(".claude/rules/air-flows.md", "# 使用者自己的檔案，剛好同名\n")
+        self.assertEqual(install.path_rules_status(self.p.root, hosts.CLAUDE, self.p.cfg()), ([], ["air-flows.md"], ["air-steps.md"]))
+        out = install.ensure_path_rules(self.p.root, hosts.CLAUDE, self.p.cfg())
+        self.assertIn("updated 1", out[0])
+        self.assertIn("unchanged 5", out[0])
+        self.assertTrue(any("略過 .claude/rules/air-flows.md" in line and "不是 AIR 建立的" in line for line in out))
+        self.assertIn("STEP-1", steps.read_text(encoding="utf-8"))
+        self.assertEqual((self.rules_dir() / "air-flows.md").read_text(encoding="utf-8"), "# 使用者自己的檔案，剛好同名\n")
+        (self.rules_dir() / "air-main.md").unlink()
+        self.assertEqual(install.path_rules_status(self.p.root, hosts.CLAUDE, self.p.cfg())[0], ["air-main.md"])
+
+    def test_remove_only_touches_managed_files_and_prunes_the_directory(self):
+        install.ensure_path_rules(self.p.root, hosts.CLAUDE, self.p.cfg())
+        self.p.write(".claude/rules/mine.md", "# mine\n")
+        removed = install.remove_path_rules(self.p.root, hosts.CLAUDE)
+        self.assertEqual(len(removed), len(RULE_FILES))
+        self.assertEqual([p.name for p in self.rules_dir().iterdir()], ["mine.md"])
+        (self.rules_dir() / "mine.md").unlink()
+        install.ensure_path_rules(self.p.root, hosts.CLAUDE, self.p.cfg())
+        install.remove_path_rules(self.p.root, hosts.CLAUDE)
+        self.assertFalse((self.p.root / ".claude").exists())
+        self.assertEqual(install.remove_path_rules(self.p.root, hosts.CODEX), [])
 
 
 class TestHookScripts(ProjectTestCase):
@@ -247,6 +315,8 @@ class TestFullInstall(ProjectTestCase):
             self.assertTrue((self.p.root / base / "air-review" / "schema.json").exists(), base)
         self.assertTrue((self.p.root / ".codex" / "hooks.json").exists())
         self.assertIn("信任", r.stdout)  # Codex 的 hook 要使用者信任
+        self.assertEqual(sorted(p.name for p in (self.p.root / ".claude" / "rules").iterdir()), RULE_FILES)
+        self.assertIn(".claude/rules/：各層規則 created 7", r.stdout)
         self.assertTrue(os.access(self.p.root / ".git" / "hooks" / "pre-commit", os.X_OK))
         ignore = (self.p.root / ".air" / ".gitignore").read_text(encoding="utf-8").split()
         for name in ("python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log", "last-check.json", "metrics.jsonl"):
@@ -261,6 +331,10 @@ class TestFullInstall(ProjectTestCase):
         self.assertFalse((self.p.root / ".codex").exists())
         self.assertFalse((self.p.root / ".agents").exists())
         self.assertEqual((self.p.root / ".air" / "hosts").read_text(encoding="utf-8").split(), ["claude"])
+        self.assertTrue((self.p.root / ".claude" / "rules" / "air-steps.md").exists())
+        self.p.air("uninstall")
+        self.assertEqual(self.p.air("install", "--host", "codex").returncode, 0)
+        self.assertFalse((self.p.root / ".claude").exists())  # Codex 沒有路徑規則
 
     def test_invalid_settings_json_does_not_abort_the_rest(self):
         # 中途失敗不能留下「看起來裝好一半」的狀態（F10）：其他接點照做，失敗的列出來
@@ -296,6 +370,7 @@ class TestFullInstall(ProjectTestCase):
         self.assertEqual((self.p.root / "CLAUDE.md").read_text(encoding="utf-8"), "# mine\n")
         self.assertFalse((self.p.root / "AGENTS.md").exists())
         self.assertFalse((self.p.root / ".claude" / "settings.json").exists())
+        self.assertFalse((self.p.root / ".claude" / "rules").exists())
         self.assertFalse((self.p.root / ".codex").exists())
         self.assertFalse((self.p.root / ".agents").exists())
         self.assertFalse((self.p.root / ".air" / "hosts").exists())

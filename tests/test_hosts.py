@@ -42,10 +42,17 @@ class TestCodexHooksFile(ProjectTestCase):
                 self.assertTrue(command.startswith("sh "))
                 self.assertTrue(command.endswith(" codex"))
 
-    def test_no_read_hook_for_codex(self):
+    def test_no_read_hook_anywhere_and_only_claude_has_a_rules_dir(self):
+        # 2.6.2 起 Claude Code 的各層規則改用 .claude/rules 路徑規則：讀檔前的 hook 退休，但舊設定裡的要認得才換得掉
         install.ensure_hooks(self.p.root, hosts.CODEX)
         self.assertFalse(any("pre_read" in c for _, _, c in self.entries(self.data())))
-        self.assertIn("pre_read.sh", hosts.CLAUDE.scripts)
+        for host in hosts.HOSTS.values():
+            self.assertNotIn("pre_read.sh", host.scripts, host.name)
+        self.assertEqual(hosts.CLAUDE.rules_dir, Path(".claude") / "rules")
+        self.assertIsNone(hosts.CODEX.rules_dir)
+        self.assertIn("pre_read.sh", hosts.LEGACY_SCRIPTS)
+        self.assertEqual(hosts.air_commands()[hosts.hook_command(hosts.CLAUDE, "pre_read.sh")], (hosts.CLAUDE, "pre_read.sh"))
+        self.assertFalse((self.p.root / "AIR" / "hooks" / "pre_read.sh").exists())
 
     def test_every_hook_has_timeout(self):
         install.ensure_hooks(self.p.root, hosts.CODEX)

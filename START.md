@@ -65,7 +65,7 @@
 
 ## 階段 4：建立分層
 
-1. `python3 AIR/air.py layers`：建立各層的目錄（各層的規則在 `AIR/rules/`，第一次讀寫該層時 hook 會附上）。
+1. `python3 AIR/air.py layers`：建立各層的目錄（各層的規則在 `AIR/rules/`，讀寫該層時會自動附上：Claude Code 經 `.claude/rules`，Codex 經 hook）。
 2. `python3 AIR/air.py check`：此時各層只有 `__init__.py` 與 contracts 的樣板，應該通過。
 3. `python3 AIR/air.py phase layered`（會確認層目錄都存在、檢查通過），然後 commit：`AIR：建立分層`。
 

@@ -4,10 +4,11 @@
 air.py 用這裡的 parse() 把 payload 正規化成 Event，處理完再用該宿主聽得懂的方式回應。
 
 目前支援：
-  claude  Claude Code：.claude/settings.json、.claude/skills/。Grok Build 讀同一份設定（相容 Claude Code 的 hook），
-          欄位名稱的差異（stopHookActive）在 parse() 處理。
-  codex   Codex：.codex/hooks.json、.agents/skills/。沒有 $CLAUDE_PROJECT_DIR、沒有 Read 工具、
-          PreToolUse 不支援 permissionDecision: ask（改成提醒）；hook 要在 Codex 裡信任過才會執行。
+  claude  Claude Code：.claude/settings.json、.claude/skills/、.claude/rules/（各層規則用宿主內建的路徑規則載入，
+          不經 hook、不啟動 Python）。Grok Build 讀同一份設定（相容 Claude Code 的 hook），欄位名稱的差異（stopHookActive）在 parse() 處理。
+  codex   Codex：.codex/hooks.json、.agents/skills/。沒有 $CLAUDE_PROJECT_DIR、沒有 Read 工具、沒有路徑規則
+          （各層規則由 pre-edit hook 在第一次編輯該層時附上）、PreToolUse 不支援 permissionDecision: ask（改成提醒）；
+          hook 要在 Codex 裡信任過才會執行。
 """
 
 from __future__ import annotations
@@ -20,13 +21,14 @@ from pathlib import Path
 HOOKS = [
     ("SessionStart", None, "session_start.sh", 60),
     ("PreToolUse", "Bash", "pre_bash.sh", 30),
-    ("PreToolUse", "Read", "pre_read.sh", 30),
     ("PreToolUse", "Edit|Write|MultiEdit", "pre_edit.sh", 30),
     ("PostToolUse", "Edit|Write|MultiEdit", "post_edit.sh", 60),
     ("Stop", None, "stop.sh", 120),
 ]
 SCRIPTS = tuple(script for _, _, script, _ in HOOKS)
-LEGACY_SCRIPTS: tuple[str, ...] = ()  # 改過名的腳本：重新安裝時要認得舊設定裡的名稱
+# 退休或改過名的腳本：重新安裝時要認得舊設定裡的名稱，才能把它們換掉。
+# pre_read.sh（2.3～2.6.1）：Claude Code 讀檔前注入各層規則，每次 Read 多啟動一個 Python；2.6.2 起改用 .claude/rules 路徑規則
+LEGACY_SCRIPTS: tuple[str, ...] = ("pre_read.sh",)
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class Host:
     root_expr: str            # hook 指令裡取得專案根目錄的寫法（shell）
     supports_ask: bool        # PreToolUse 能不能回 permissionDecision: ask
     scripts: tuple[str, ...]  # 這個宿主會裝的 hook
+    rules_dir: Path | None = None  # 宿主內建的路徑規則目錄（Claude Code 的 .claude/rules）：有的話各層規則放這裡，hook 不再注入
     description: str = ""     # hook 設定檔新建時的 description（Codex 的 hooks.json 有這個欄位）
     note: str = ""            # 安裝後要提醒使用者的事
 
@@ -49,13 +52,14 @@ CLAUDE = Host(
     name="claude", label="Claude Code",
     hooks_file=Path(".claude") / "settings.json", skills_dir=Path(".claude") / "skills",
     root_expr='"$CLAUDE_PROJECT_DIR"', supports_ask=True, scripts=SCRIPTS,
+    rules_dir=Path(".claude") / "rules",  # 各層規則：air-<層>.md 帶 paths 前言，讀寫該層時由 Claude Code 自己載入
 )
 CODEX = Host(
     name="codex", label="Codex",
     hooks_file=Path(".codex") / "hooks.json", skills_dir=Path(".agents") / "skills",
     # Codex 的 hook 沒有 $CLAUDE_PROJECT_DIR，工作目錄是 session 的 cwd：用 git 找根目錄，不是 git repo 就用 cwd
     root_expr='"$(git rev-parse --show-toplevel 2>/dev/null || pwd)"', supports_ask=False,
-    scripts=tuple(s for s in SCRIPTS if s != "pre_read.sh"),  # Codex 用 shell 讀檔，沒有 Read 工具
+    scripts=SCRIPTS,  # 沒有路徑規則：各層規則由 pre_edit.sh 在第一次編輯該層時附上（context.py）
     description="AIR 規範檢查（由 AIR/install.sh 產生；AIR 的項目請勿手動修改）",
     note="Codex 要在它的 hooks 信任介面裡信任這些 hook 才會執行；AIR 更新後 hook 設定有變動時要重新信任。",
 )
@@ -76,7 +80,7 @@ def air_commands() -> dict[str, tuple[Host | None, str]]:
     """AIR 曾經產生過的每一種 hook 指令 → (宿主, 腳本)；舊格式的宿主是 None。安裝器與檢查都用完全相同的字串比對。"""
     out: dict[str, tuple[Host | None, str]] = {}
     for host in HOSTS.values():
-        for script in host.scripts:
+        for script in (*host.scripts, *LEGACY_SCRIPTS):  # 退休的腳本也要認得（目前的寫法），重新安裝才換得掉
             out[hook_command(host, script)] = (host, script)
     for script in (*SCRIPTS, *LEGACY_SCRIPTS):
         for command in _legacy_commands(script):

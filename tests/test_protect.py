@@ -55,6 +55,17 @@ class TestClassify(ProjectTestCase):
                 self.assertEqual(self.decide(f"{base}/air-x/SKILL.md"), DENY)
                 self.assertEqual(self.decide(f"{base}/mine/SKILL.md"), ALLOW)
 
+    def test_managed_path_rule_denied_but_users_rule_allowed(self):
+        # .claude/rules/air-<層>.md 由安裝程式產生（AIR/rules 的複本）：跟 skill 一樣不能在專案裡改；使用者自己的規則檔不管
+        self.p.write(".claude/rules/air-steps.md", "---\npaths:\n  - \"demo/steps/**/*.py\"\n---\n<!-- AIR:MANAGED -->\n# steps\n")
+        self.p.write(".claude/rules/mine.md", "# mine\n")
+        self.p.write(".claude/rules/air-flows.md", "# 使用者自己取了 air- 開頭的名字，沒有標記\n")
+        d = protect.classify(self.p.root / ".claude" / "rules" / "air-steps.md", self.p.cfg())
+        self.assertEqual(d.action, DENY)
+        self.assertIn("air-maintain-rules", d.reason)
+        self.assertEqual(self.decide(".claude/rules/mine.md"), ALLOW)
+        self.assertEqual(self.decide(".claude/rules/air-flows.md"), ALLOW)
+
     def test_users_rule_files_and_docs_allowed(self):
         self.p.layer("flows")
         self.p.write("demo/flows/CLAUDE.md", "# user's own\n")
@@ -109,8 +120,9 @@ class TestPausedLiftsTheFreeze(ProjectTestCase):
                 self.assertEqual(protect.classify(self.p.root / rel, self.p.cfg()).action, DENY)
         self.assertEqual(protect.classify(self.p.root / ".air" / "project.toml", self.p.cfg()).action, ASK)
         r = self.p.hook("pre-edit", claude_edit(py))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("STEP-1", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])  # 解除凍結後照常附規則
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)  # Claude Code：放行，規則由 .claude/rules 載入
+        r = self.p.hook("pre-edit", claude_edit(py), host="codex")
+        self.assertIn("STEP-1", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])  # Codex：解除凍結後照常附規則
         project.resume(self.p.cfg())
         self.assertEqual(protect.classify(py, self.p.cfg()).action, DENY)
 
@@ -146,19 +158,22 @@ class TestPreEditHook(ProjectTestCase):
         r = self.p.hook("pre-edit", claude_edit(self.p.root / "demo" / "legacy.py"))
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
 
-    def test_allow_in_a_layer_attaches_rules_then_is_silent(self):
-        r = self.p.hook("pre-edit", claude_edit(self.p.root / "demo" / "steps" / "a.py"))
+    def test_allow_in_a_layer_is_silent_for_claude_and_attaches_rules_once_for_codex(self):
+        a, b = self.p.root / "demo" / "steps" / "a.py", self.p.root / "demo" / "steps" / "b.py"
+        r = self.p.hook("pre-edit", claude_edit(a))
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))  # Claude Code 的規則由 .claude/rules 載入，不重複附
+        r = self.p.hook("pre-edit", claude_edit(a), host="codex")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("STEP-1", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
-        r = self.p.hook("pre-edit", claude_edit(self.p.root / "demo" / "steps" / "b.py"))
+        r = self.p.hook("pre-edit", claude_edit(b), host="codex")
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
-    def test_ask_and_rules_can_be_combined(self):
-        # 同一個 patch 改了 project.toml 與某層的檔案：既要確認，也要附規則
+    def test_reminder_and_rules_can_be_combined(self):
+        # Codex 同一個 patch 改了 project.toml 與某層的檔案：既要提醒要同意，也要附規則
         patch = "*** Begin Patch\n*** Update File: .air/project.toml\n*** Update File: demo/steps/a.py\n*** End Patch"
         payload = {"tool_name": "apply_patch", "session_id": "s1", "cwd": str(self.p.root), "tool_input": {"command": patch}}
-        out = json.loads(self.p.hook("pre-edit", payload).stdout)["hookSpecificOutput"]
-        self.assertEqual(out["permissionDecision"], "ask")
+        out = json.loads(self.p.hook("pre-edit", payload, host="codex").stdout)["hookSpecificOutput"]
+        self.assertIn("需要使用者同意", out["additionalContext"])
         self.assertIn("STEP-1", out["additionalContext"])
 
     def test_codex_patch_payload(self):

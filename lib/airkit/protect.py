@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import project
+from . import install, project
 from .config import PROJECT_FILE, REPORT_FILE, Config
 from .hosts import HOSTS
 from .install import SKILL_MARK
@@ -30,6 +30,15 @@ def _managed_skill(parts: tuple[str, ...], root: Path) -> bool:
     for host in HOSTS.values():
         n = len(host.skills_dir.parts)
         if len(parts) > n and parts[:n] == host.skills_dir.parts and (root.joinpath(*parts[:n + 1]) / SKILL_MARK).exists():
+            return True
+    return False
+
+
+def _managed_path_rule(parts: tuple[str, ...], root: Path) -> bool:
+    """任一宿主的路徑規則目錄底下、帶 AIR:MANAGED 標記的規則檔（使用者自己放的規則不算）。"""
+    for host in HOSTS.values():
+        n = len(host.rules_dir.parts) if host.rules_dir else 0
+        if n and len(parts) == n + 1 and parts[:n] == host.rules_dir.parts and install.is_managed_path_rule(root.joinpath(*parts)):
             return True
     return False
 
@@ -56,6 +65,8 @@ def classify(path: Path, cfg: Config) -> Decision:
         return Decision(DENY, ".air/ 裡的其他檔案（紀錄、Python 路徑）由 AIR 的指令寫入，不要手動修改。")
     if _managed_skill(parts, cfg.root):
         return Decision(DENY, "這個 skill 由 AIR 複製，更新 AIR 時會覆蓋。要修改請在 AIR 的開發 repo 改。")
+    if _managed_path_rule(parts, cfg.root):
+        return Decision(DENY, "這份規則由 AIR 產生（AIR/rules/<層>.md 的複本），更新 AIR 時會覆蓋。要調整規範，照 skill air-maintain-rules 在 AIR 的開發 repo 改。")
     stage = READ_ONLY_PHASES.get(cfg.phase)
     if stage and rel.suffix == ".py" and project.paused(cfg.root) is None:  # 暫停中解除凍結：照一般開發
         return Decision(DENY, f"目前在{stage}階段（phase = {cfg.phase}），不能修改程式。先完成遷移報告 {REPORT_FILE.as_posix()}，"
