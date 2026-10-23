@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -45,15 +46,21 @@ def create_layers(cfg: Config, names: list[str] | None = None) -> list[str]:
 
 
 def set_phase(cfg: Config, phase: str) -> None:
-    """直接改寫 .air/project.toml 的 phase，不檢查順序與前置條件；一般請用 transition()。"""
+    """直接改寫 .air/project.toml 的 phase，不檢查順序與前置條件；一般請用 transition()。
+    寫入前比對檔案裡的階段跟 cfg 讀到的一樣（兩個 session 同時推進時不互相覆蓋），寫暫存檔再 os.replace（中斷不留半份）。"""
     if phase not in PHASES:
         raise ValueError(f"未知的階段：{phase}（可用：{'、'.join(PHASES)}）")
     path = cfg.root / PROJECT_FILE
     text = path.read_text(encoding="utf-8")
-    new, n = re.subn(r'^(phase\s*=\s*)"[^"]*"', rf'\g<1>"{phase}"', text, count=1, flags=re.M)
-    if n == 0:
+    m = re.search(r'^phase\s*=\s*"([^"]*)"', text, re.M)
+    if m is None:
         raise ValueError(".air/project.toml 裡找不到 migration.phase。")
-    path.write_text(new, encoding="utf-8")
+    if m.group(1) != cfg.phase:
+        raise TransitionError(f".air/project.toml 的階段已經是 {m.group(1)}，跟這次讀到的 {cfg.phase} 不同（別的 session 改過？）。"
+                              "重新執行 python3 AIR/air.py status 看目前的階段再決定。")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text[:m.start(1)] + phase + text[m.end(1):], encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def preconditions(cfg: Config, phase: str) -> list[str]:
@@ -63,7 +70,7 @@ def preconditions(cfg: Config, phase: str) -> list[str]:
     if phase in ("analyzed", "planned") and not report_path.exists():
         missing.append(f"找不到遷移報告 {REPORT_FILE}（從 AIR/templates/遷移報告.md 複製）")
     if phase == "analyzed" and not cfg.test_command:
-        missing.append("test-command 尚未設定（.air/project.toml 的 project.test-command）")
+        missing.append("測試指令尚未設定（.air/project.toml 的 [tests] command）")
     if phase == "layered":
         absent = [la.name for la in cfg.layers.values() if not la.path.is_dir()]
         if absent:
@@ -199,7 +206,7 @@ def _module_facts(file: Path, cfg: Config) -> dict:
 
 
 def survey_rows(cfg: Config) -> list[dict]:
-    files = sorted(cfg.package_dir.rglob("*.py")) if cfg.package_dir.is_dir() else []
+    files = sorted(f for f in cfg.package_dir.rglob("*.py") if not cfg.is_excluded(f)) if cfg.package_dir.is_dir() else []
     return [_module_facts(f, cfg) for f in files]
 
 
@@ -270,6 +277,7 @@ def status_data(cfg: Config) -> dict:
         "phase": cfg.phase,
         "next_phase": PHASES[index + 1] if 0 <= index < len(PHASES) - 1 else None,
         "paused": None if pause_entry is None else {k: pause_entry[k] for k in ("time", "phase", "reason")},
+        "exclude": list(cfg.exclude),
         "paused_text": None if pause_entry is None else describe_pause(pause_entry),
         "layers": [la.name for la in cfg.layers.values() if la.path.is_dir()],
         "checked_files": len(report.checked),
@@ -308,6 +316,7 @@ def status(cfg: Config) -> str:
         *([f"遷移暫停中：{d['paused_text']}（python3 AIR/air.py resume 繼續；暫停期間照一般開發，架構檢查照常）"] if d["paused"] else []),
         f"已建立的層：{'、'.join(d['layers']) or '無'}",
         f"檢查範圍：層內 {d['checked_files']} 個檔案；舊程式碼模組 {d['legacy_modules']} 個（不檢查）",
+        *([f"不歸 AIR 管的路徑（migration.exclude）：{'、'.join(d['exclude'])}"] if d["exclude"] else []),
         f"暫時允許的舊模組 import：{d['allow_legacy']}",
         f"違規：{d['violations']}　提醒：{d['warnings']}",
         f"套件完整性：{integrity_line}",

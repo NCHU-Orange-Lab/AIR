@@ -74,6 +74,32 @@ class TestNestedShell(unittest.TestCase):
         self.assertIsNone(guard.check('bash -c "git status && ls"'))
 
 
+class TestRemote(unittest.TestCase):
+    """報告 §4.9：`ssh host 'git commit --no-verify'` 不經過 guard。比照 bash -c 拆開遠端指令。"""
+
+    def test_remote_commit_that_skips_hooks_is_blocked(self):
+        for cmd in ("ssh lab02 'git commit --no-verify -m x'",
+                    'ssh -p 22 -i ~/.ssh/key user@lab02 "cd ~/repo && git commit -n -m x"',
+                    "ssh -p22 lab02 git commit --no-verify -m x",
+                    "ssh -o StrictHostKeyChecking=no lab02 'SKIP=air-check git commit -m x'",
+                    "ssh lab02 'bash -c \"git commit --no-verify -m x\"'",
+                    "ssh lab02 'git status; git config core.hooksPath /tmp/none'"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(guard.check(cmd))
+
+    def test_harmless_remote_commands_pass(self):
+        for cmd in ("ssh lab02 git status", "ssh lab02 'git commit -m x'", "ssh -t lab02", "ssh lab02", "ssh -p 22 lab02 ./run_lab02.sh",
+                    "ssh lab02 'git config --get core.hooksPath'"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(guard.check(cmd))
+
+    def test_remote_script_parsing(self):
+        self.assertEqual(guard.remote_script(["ssh", "-p", "22", "-v", "lab02", "git", "status"]), "git status")
+        self.assertEqual(guard.remote_script(["ssh", "--", "lab02", "ls"]), "ls")
+        self.assertIsNone(guard.remote_script(["ssh", "-p", "22", "lab02"]))
+        self.assertIsNone(guard.remote_script(["scp", "a", "b"]))
+
+
 class TestUnparseable(unittest.TestCase):
     def test_suspicious_literal_in_unparseable_command_is_blocked(self):
         # 引號不成對時 shlex 解析失敗；含可疑字面值就保守擋下（fail-closed）

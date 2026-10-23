@@ -115,7 +115,7 @@ class TestSessionStart(ProjectTestCase):
         text = out["additionalContext"]
         self.assertIn("遷移階段：installed", text)
         self.assertIn("分析階段", text)
-        self.assertIn("不修改 .py", text)
+        self.assertIn("不修改套件與測試目錄裡的 .py", text)
         self.assertIn("AIR/rules/", text)
 
     def test_rule_delivery_line_follows_the_host(self):
@@ -154,7 +154,7 @@ class TestSessionStart(ProjectTestCase):
         self.assertIn("python3 AIR/air.py resume", text)
         self.assertIn("不要自己執行", text)
         self.assertIn("新程式仍寫進對應的層", text)
-        self.assertNotIn("不修改 .py（會被擋下）", text)  # 不再催分析階段的事
+        self.assertNotIn("不修改套件與測試目錄裡的 .py（會被擋下", text)  # 不再催分析階段的事
         self.assertNotIn("【AIR/START.md", text)       # 也不附那一節
         project.resume(self.p.cfg())
         text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]

@@ -89,10 +89,32 @@ class TestReadOnlyDuringAnalysis(ProjectTestCase):
                 self.assertIn("分析階段", d.reason)
                 self.assertIn("AIR-遷移報告.md", d.reason)
 
+    def test_scripts_outside_the_package_are_not_frozen(self):
+        # 報告 §4.3 a：實戰中 scripts/、tools/、notebooks/ 全被擋（4/4），等於裝上 AIR 之後所有 session 都不能改任何 Python
+        for rel in ("scripts/exp_hotspot_probe.py", "tools/upload_log.py", "notebooks/x.py", "setup.py"):
+            with self.subTest(rel=rel):
+                self.assertEqual(protect.classify(self.p.root / rel, self.p.cfg()).action, ALLOW)
+        d = protect.classify(self.p.root / "demo" / "steps" / "a.py", self.p.cfg())
+        self.assertEqual(d.action, DENY)
+        self.assertIn("套件與測試目錄", d.reason)
+        self.assertIn("demo、tests", d.reason)
+
     def test_report_and_docs_allowed(self):
         for rel in ("docs/AIR-遷移報告.md", "README.md", "docs/notes.md"):
             with self.subTest(rel=rel):
                 self.assertEqual(protect.classify(self.p.root / rel, self.p.cfg()).action, ALLOW)
+
+
+class TestExcludeLiftsTheFreeze(ProjectTestCase):
+    phase = "installed"
+    exclude = '"demo/experiments", "tests/fixtures"'
+
+    def test_excluded_paths_inside_the_package_are_not_frozen_but_layers_still_are(self):
+        self.assertEqual(protect.classify(self.p.root / "demo" / "experiments" / "try.py", self.p.cfg()).action, ALLOW)
+        self.assertEqual(protect.classify(self.p.root / "tests" / "fixtures" / "gen.py", self.p.cfg()).action, ALLOW)
+        self.assertEqual(protect.classify(self.p.root / "demo" / "experiments_old" / "try.py", self.p.cfg()).action, DENY)
+        self.assertEqual(protect.classify(self.p.root / "demo" / "legacy.py", self.p.cfg()).action, DENY)
+        self.assertEqual(protect.classify(self.p.root / "tests" / "test_a.py", self.p.cfg()).action, DENY)
 
 
 class TestReadOnlyDuringPlanning(ProjectTestCase):

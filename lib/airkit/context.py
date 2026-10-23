@@ -22,8 +22,8 @@ SESSIONS_DIR = Path(".air") / "sessions"
 STAGE_OF_PHASE = {"installed": 2, "analyzed": 3, "planned": 4, "layered": 5, "migrating": 5}  # 這個階段該讀 START.md 的哪一節
 KEEP_DAYS = 7  # 超過這麼久沒動的注入紀錄，session 開始時順便清掉
 PHASE_GUIDE = {
-    "installed": "分析階段（AIR/START.md 階段 2）：只讀程式、寫遷移報告，不修改 .py（會被擋下）。",
-    "analyzed": "計畫階段（AIR/START.md 階段 3）：在遷移報告寫計畫，不修改 .py（會被擋下）。",
+    "installed": "分析階段（AIR/START.md 階段 2）：只讀程式、寫遷移報告，不修改套件與測試目錄裡的 .py（會被擋下；exclude 的路徑與套件外的腳本不受限）。",
+    "analyzed": "計畫階段（AIR/START.md 階段 3）：在遷移報告寫計畫，不修改套件與測試目錄裡的 .py（會被擋下；exclude 的路徑與套件外的腳本不受限）。",
     "planned": "建立分層（AIR/START.md 階段 4）：python3 AIR/air.py layers，然後 check、phase layered。",
     "layered": "準備逐批遷移（AIR/START.md 階段 5）：第一批開始時執行 phase migrating。",
     "migrating": "逐批遷移中（AIR/START.md 階段 5）：每批先補行為保護測試，verify 通過才 commit；每批結束停下來等核准。",

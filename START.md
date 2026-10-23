@@ -19,11 +19,11 @@
 1. **前置檢查**
    - 這是 Python 專案嗎？不是的話，停下來告訴使用者 AIR 目前只支援 Python。
    - `AIR/` 是否直接放在 git repo 的根目錄？
-   - `git status` 是否乾淨？不乾淨的話，請使用者先 commit 或暫存現有的修改。
+   - 工作樹不用乾淨：安裝程式最後會列出它建立或修改的路徑，commit 時只加那些。
 2. **確認套件**：找出專案的主要套件（例如 `src/shop/` 或 `shop/`）。只有一個候選時直接用；有多個或找不到時，列出候選並問使用者。
 3. **執行安裝**：`sh AIR/install.sh`（需要指定時：`sh AIR/install.sh --package shop --package-dir src/shop`；只用一種工具時加 `--host claude` 或 `--host codex`）
 4. 向使用者報告安裝程式列出的接點，以及任何「略過」或「無法自動加入」的項目；用 Codex 時提醒使用者要在 Codex 裡信任 AIR 的 hook。`python3 AIR/air.py doctor` 可以確認接線。
-5. 請使用者確認後 commit：`安裝 AIR 規範`。
+5. 請使用者確認後 commit：`安裝 AIR 規範`（只 `git add` 安裝程式列出的路徑，不要 `git add -A`）。
 
 **停下來**，等使用者核准後進入階段 2。
 
@@ -31,17 +31,18 @@
 
 ## 階段 2：分析
 
-這個階段與下一個階段只讀程式、寫報告，**不修改 `.py`**（編輯 `.py` 會被 hook 擋下）。專案沒有舊程式碼（全新專案）時，仍要走完階段 2～4，報告可以很短。
+這個階段與下一個階段只讀程式、寫報告，**不修改套件目錄與測試目錄裡的 `.py`**（會被 hook 擋下；套件外的腳本與 `migration.exclude` 的路徑不受限）。專案沒有舊程式碼（全新專案）時，仍要走完階段 2～4，報告可以很短。
 
 1. 執行 `python3 AIR/air.py survey --out docs/air-survey.md`：完整的盤點表寫進檔案，畫面只印摘要（模組數、第三方套件、訊號最多的模組）。分析時只查需要的列，不要把整份表讀進對話。
-2. **確認測試指令**：找出專案怎麼跑測試（pyproject、tox、Makefile、CI 設定）。不確定就問使用者。確認後寫進 `.air/project.toml` 的 `project.test-command`。
-3. **跑一次測試**，記錄結果。測試本來就失敗的話，記下來並告訴使用者；**不要在這個階段修測試**。
-4. 複製 `AIR/templates/遷移報告.md` 到 `docs/AIR-遷移報告.md`，填寫「現況」與「分析」兩節：
+2. **決定不歸 AIR 管的路徑**：實驗區、腳本、筆記本等不打算遷移的，列出來問使用者，同意後寫進 `.air/project.toml` 的 `migration.exclude`（目錄或檔案，可寫 `dir/**`）。它們不凍結、不進驗收指紋、不列進盤點，留在外面算正式的結局；改完重跑 survey。
+3. **確認測試指令**：找出專案怎麼跑測試（pyproject、tox、Makefile、CI 設定）。不確定就問使用者。確認後寫進 `.air/project.toml` 的 `[tests]` `command`。
+4. **跑一次測試**，記錄結果。測試本來就失敗的話，記下來並告訴使用者；**不要在這個階段修測試**。
+5. 複製 `AIR/templates/遷移報告.md` 到 `docs/AIR-遷移報告.md`，填寫「現況」與「分析」兩節：
    - 每個模組建議歸到哪一層，以及理由（依 survey 的訊號：有 I/O 的歸 storage、用第三方工具的歸 adapters、純計算的歸 steps、負責串接的歸 flows、進入點歸 main）
    - 自己寫的模型、資料管線、訓練迴圈也歸 adapters：一個工具一個子套件，依角色切檔（`data.py`、`model.py`、`trainer.py`、`predictor.py`…，見 skill `air-wrap-tool`）；只有前後處理與 numpy 版的指標是 steps
    - **混在一起的模組**（例如同一個函式裡又讀檔又計算）要特別標出來，這類模組需要拆開
    - 測試覆蓋不足、風險高的地方
-5. `python3 AIR/air.py phase analyzed`（會確認 `test-command` 已設定、遷移報告存在）
+6. `python3 AIR/air.py phase analyzed`（會確認測試指令已設定、遷移報告存在）
 
 **停下來**，請使用者審閱分析結果。使用者對分類有意見時，修改報告後再請他確認。
 
@@ -98,7 +99,7 @@
 
 1. 移除階段 5 留下的轉接，把呼叫端改成直接 import 新的層。
 2. 清空 `migration.allow-legacy`。
-3. 檢查剩下的舊程式碼：應該搬的都搬完了；剩下的（例如設定、腳本）在報告裡寫明為什麼留在外面。
+3. 檢查剩下的舊程式碼：應該搬的都搬完了；剩下的（例如設定、腳本）在報告裡寫明為什麼留在外面。`migration.exclude` 的路徑算正式留在外面，原因也寫進報告。
 4. `python3 AIR/air.py verify --scope final` 必須通過：除了測試與架構檢查，還會確認 `allow-legacy` 已清空，並列出還在層外的模組（對照第 3 步的說明）。再照 skill `air-review` 把整個遷移的變更審一次（`python3 AIR/air.py review --bundle --base <遷移開始前的 commit 或分支>`）。
 5. 在遷移報告寫下總結，然後 `python3 AIR/air.py phase done`（需要第 4 步的驗收紀錄，而且之後沒有再改程式或設定；改了就重跑第 4 步），commit：`AIR 遷移完成`。
 

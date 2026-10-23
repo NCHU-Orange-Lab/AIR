@@ -1,10 +1,20 @@
 """讀取設定：套件預設值（AIR/config.toml）＋專案設定（.air/project.toml）。
 
 套件預設值會隨著更新整包換掉；專案設定屬於專案，更新時不會被覆蓋。
+
+專案設定（schema v3，2.7 起）：
+  [project]    package、package-dir、tests-dir（舊鍵 test-command、test-timeout 仍可用，等同 [tests] 的 command、timeout）
+  [imports]    extra：純的層額外允許的外部模組
+  [migration]  phase、allow-legacy、exclude（不歸 AIR 管的路徑：不凍結、不進驗收指紋、不列進 survey 與層外清單；層內的檔案不受影響）
+  [tests]      command、timeout（每批 verify 跑的測試指令）
+  [verify]     fingerprint-extra：驗收指紋除了套件、tests、設定之外還要看的路徑
+  [hooks]      stop-scope：session（預設）或 all
+exclude 與 fingerprint-extra 都是「相對專案根目錄的目錄或檔案」，可以寫成 dir/**（意思一樣），不支援其他萬用字元。
 """
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +67,35 @@ class Config:
     phase: str
     test_command: str
     test_timeout: int  # 秒；verify 執行測試指令的上限
+    exclude: tuple[str, ...] = ()           # migration.exclude：相對根目錄的 posix 路徑，沒有結尾斜線
+    fingerprint_extra: tuple[str, ...] = () # verify.fingerprint-extra：同上
+    stop_scope: str = "session"             # hooks.stop-scope：session | all
+    old_test_keys: tuple[str, ...] = ()     # 還在用 project.test-command／test-timeout（doctor 提醒搬到 [tests]）
+
+    def is_excluded(self, path: Path) -> bool:
+        """這個路徑在 migration.exclude 裡（或底下）。只給層外的檔案用：層內的檔案一律檢查。"""
+        try:
+            rel = path.resolve().relative_to(self.root.resolve()).as_posix()
+        except ValueError:
+            return False
+        return any(rel == e or rel.startswith(e + "/") for e in self.exclude)
+
+
+STOP_SCOPES = ("session", "all")
+
+
+def _paths(values, field: str) -> tuple[str, ...]:
+    """exclude、fingerprint-extra 的清單：目錄或檔案的相對路徑。dir/** 與 dir/ 都當成 dir；不接受絕對路徑、..、萬用字元。"""
+    if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+        raise ConfigError(f".air/project.toml 的 {field} 要是路徑字串的清單。")
+    out = []
+    for raw in values:
+        p = raw.strip().replace("\\", "/")
+        p = re.sub(r"/(\*\*|\*)?$", "", p)  # 去掉結尾的 /、/*、/**
+        if not p or p.startswith("/") or re.match(r"^[A-Za-z]:", p) or ".." in p.split("/") or any(c in p for c in "*?["):
+            raise ConfigError(f".air/project.toml 的 {field} 只能是相對根目錄的目錄或檔案（可以寫成 dir/**），不是：{raw!r}")
+        out.append(p.rstrip("/"))
+    return tuple(out)
 
 
 def build(kit: dict, project: dict, root: Path) -> Config:
@@ -65,6 +104,10 @@ def build(kit: dict, project: dict, root: Path) -> Config:
     package = proj.get("package", "")
     if not package:
         raise ConfigError(".air/project.toml 的 project.package 還沒設定。")
+    tests = project.get("tests", {})
+    stop_scope = project.get("hooks", {}).get("stop-scope", "session")
+    if stop_scope not in STOP_SCOPES:
+        raise ConfigError(f".air/project.toml 的 hooks.stop-scope 只能是 {'、'.join(STOP_SCOPES)}，不是：{stop_scope!r}")
     package_dir = root / proj.get("package-dir", package)
     layers = {
         name: Layer(
@@ -101,8 +144,12 @@ def build(kit: dict, project: dict, root: Path) -> Config:
         max_complexity=kit.get("soft", {}).get("max-complexity", 10),
         allow_legacy=allow,
         phase=migration.get("phase", "installed"),
-        test_command=proj.get("test-command", ""),
-        test_timeout=int(proj.get("test-timeout", 600)),
+        test_command=tests.get("command", proj.get("test-command", "")),      # 兩邊都有時以 [tests] 為準
+        test_timeout=int(tests.get("timeout", proj.get("test-timeout", 600))),
+        exclude=_paths(migration.get("exclude", []), "migration.exclude"),
+        fingerprint_extra=_paths(project.get("verify", {}).get("fingerprint-extra", []), "verify.fingerprint-extra"),
+        stop_scope=stop_scope,
+        old_test_keys=tuple(k for k in ("test-command", "test-timeout") if k in proj),
     )
 
 

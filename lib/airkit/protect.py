@@ -43,6 +43,15 @@ def _managed_path_rule(parts: tuple[str, ...], root: Path) -> bool:
     return False
 
 
+def frozen(path: Path, cfg: Config) -> bool:
+    """分析／計畫階段凍結的範圍：套件目錄與測試目錄裡的 .py，減掉 migration.exclude。
+    套件外的腳本、筆記本、實驗區不凍結（實戰中整個 repo 被凍住，所有 session 都動不了）。"""
+    if path.suffix != ".py" or cfg.is_excluded(path):
+        return False
+    resolved = path.resolve()
+    return any(resolved.is_relative_to(d.resolve()) for d in (cfg.package_dir, cfg.tests_dir))
+
+
 def classify(path: Path, cfg: Config) -> Decision:
     """這個檔案能不能被編輯工具修改。只看路徑與階段，不看內容合不合規（那是 post-edit 的事）。"""
     try:
@@ -68,7 +77,8 @@ def classify(path: Path, cfg: Config) -> Decision:
     if _managed_path_rule(parts, cfg.root):
         return Decision(DENY, "這份規則由 AIR 產生（AIR/rules/<層>.md 的複本），更新 AIR 時會覆蓋。要調整規範，照 skill air-maintain-rules 在 AIR 的開發 repo 改。")
     stage = READ_ONLY_PHASES.get(cfg.phase)
-    if stage and rel.suffix == ".py" and project.paused(cfg.root) is None:  # 暫停中解除凍結：照一般開發
-        return Decision(DENY, f"目前在{stage}階段（phase = {cfg.phase}），不能修改程式。先完成遷移報告 {REPORT_FILE.as_posix()}，"
-                              "等使用者核准進入下一階段。遷移要先擱置時，由使用者執行 python3 AIR/air.py pause --reason <原因>。")
+    if stage and frozen(path, cfg) and project.paused(cfg.root) is None:  # 暫停中解除凍結：照一般開發
+        scope = f"{cfg.package_dir.relative_to(cfg.root).as_posix()}、{cfg.tests_dir.relative_to(cfg.root).as_posix()}"
+        return Decision(DENY, f"目前在{stage}階段（phase = {cfg.phase}），不能修改套件與測試目錄裡的程式（{scope}；migration.exclude 的路徑除外）。"
+                              f"先完成遷移報告 {REPORT_FILE.as_posix()}，等使用者核准進入下一階段。遷移要先擱置時，由使用者執行 python3 AIR/air.py pause --reason <原因>。")
     return Decision(ALLOW)

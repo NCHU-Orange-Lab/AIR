@@ -28,6 +28,18 @@ class TestSetPhase(ProjectTestCase):
         with self.assertRaises(ValueError):
             project.set_phase(self.p.cfg(), "finished")
 
+    def test_set_phase_refuses_when_the_file_changed_under_it_and_leaves_no_tmp(self):
+        # 報告 §4.3 e：兩個 session 同時推進階段，讀－改－寫會互相覆蓋
+        stale = self.p.cfg()
+        project.set_phase(self.p.cfg(), "analyzed")  # 另一個 session 先推進了
+        with self.assertRaises(project.TransitionError) as cm:
+            project.set_phase(stale, "analyzed")
+        self.assertIn("別的 session", str(cm.exception))
+        self.assertEqual(self.p.cfg().phase, "analyzed")
+        self.assertFalse((self.p.root / ".air" / "project.toml.tmp").exists())
+        text = (self.p.root / ".air" / "project.toml").read_text(encoding="utf-8")
+        self.assertIn("[tests]", text)  # 其他內容原封不動
+
 
 class TestTransition(ProjectTestCase):
     """phase 指令：一次前進一格、檢查前置條件、退回與強制都要原因、每次都記錄。"""
@@ -219,7 +231,7 @@ class TestTransitionNoTestCommand(ProjectTestCase):
         self.p.write(REPORT, "# 報告\n")
         r = self.p.air("phase", "analyzed")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("test-command", r.stderr)
+        self.assertIn("測試指令尚未設定", r.stderr)
 
 
 class TestFullFlow(ProjectTestCase):
@@ -292,6 +304,26 @@ class TestSurveyAndStatus(ProjectTestCase):
         d = json.loads(r.stdout)
         self.assertEqual((d["phase"], d["next_phase"], d["checked_files"], d["violations"], d["last_verify"]),
                          ("installed", "analyzed", 2, 0, None))
+
+
+class TestExclude(ProjectTestCase):
+    exclude = '"demo/experiments", "demo/scratch.py"'
+
+    def test_survey_check_and_status_skip_excluded_paths(self):
+        self.p.layer("steps", ok="x = 1\n")
+        self.p.write("demo/legacy.py", "y = 2\n")
+        self.p.write("demo/experiments/try.py", 'print("x")\n')
+        self.p.write("demo/scratch.py", "z = 3\n")
+        out = project.survey(self.p.cfg())
+        self.assertIn("`demo.legacy`", out)
+        self.assertNotIn("experiments", out)
+        self.assertNotIn("scratch", out)
+        status = self.p.air("status").stdout
+        self.assertIn("舊程式碼模組 2 個", status)  # demo/__init__.py 與 legacy.py；experiments 與 scratch 不算
+        self.assertIn("不歸 AIR 管的路徑（migration.exclude）：demo/experiments、demo/scratch.py", status)
+        r = self.p.air("check", "--json")
+        self.assertNotIn("experiments", r.stdout)
+        self.assertEqual(json.loads(self.p.air("status", "--json").stdout)["exclude"], ["demo/experiments", "demo/scratch.py"])
 
 
 class TestUsage(ProjectTestCase):

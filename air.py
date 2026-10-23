@@ -9,7 +9,7 @@
   python3 AIR/air.py review --result <檔案|-> [--base 分支]
                                              交回審查結果（JSON）：驗證後寫進 .air/review.json；有 priority 0／1 的發現結束碼 1
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
-                                             安裝接點（不指定 --host 時裝所有支援的宿主）
+                                             安裝接點（不指定 --host 時裝所有支援的宿主；最後列出要 commit 的路徑，工作樹不用先清乾淨）
   python3 AIR/air.py uninstall [--purge]
   python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查
   python3 AIR/air.py layers [層 ...]         建立分層目錄（預設全部）

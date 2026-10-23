@@ -45,14 +45,29 @@ def git(root: Path, *args: str) -> str | None:
 
 # ── 指紋 ──
 
-def source_files(root: Path) -> list[Path]:
-    """影響驗收結果的檔案：所有 .py（含 AIR 自己的 checker）、AIR 的規則設定與版本。"""
-    listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+def _under(path: Path, bases: list[Path]) -> bool:
+    return any(path == b or b in path.parents for b in bases)
+
+
+def source_files(cfg: Config) -> list[Path]:
+    """影響驗收結果的檔案：套件目錄與測試目錄的 .py、verify.fingerprint-extra 列的路徑（整個檔案或目錄）、AIR 自己的程式與設定。
+    migration.exclude 的路徑不算。只看這些：實戰中另一個 session 在 scripts/ 加一個檔案，驗收紀錄就過期，final 驗收幾乎拿不到。"""
+    root = cfg.root
+    scopes = [cfg.package_dir.resolve(), cfg.tests_dir.resolve()]
+    extra = [(root / e).resolve() for e in cfg.fingerprint_extra]
+    wanted = [p for p in scopes + extra if p.exists()]
+    listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *[rel(p, root) for p in wanted]) if wanted else ""
     if listed is None:
-        files = [p for p in root.rglob("*.py")
-                 if not any(part.startswith(".") or part in SKIP_DIRS for part in p.relative_to(root).parts)]
+        files = []
+        for base in wanted:
+            if base.is_file():
+                files.append(base)
+            else:
+                files += [p for p in base.rglob("*") if p.is_file() and not any(part.startswith(".") or part in SKIP_DIRS for part in p.relative_to(base).parts)]
     else:
-        files = [root / name for name in listed.split("\0") if name.endswith(".py")]
+        files = [(root / name).resolve() for name in listed.split("\0") if name]
+    files = [f for f in files if (f.suffix == ".py" or _under(f, extra)) and not cfg.is_excluded(f)]
+    files += [p for p in KIT_DIR.rglob("*.py") if "tests" not in p.relative_to(KIT_DIR).parts and "__pycache__" not in p.parts]  # AIR 自己的 checker
     files += [KIT_DIR / "config.toml", KIT_DIR / "VERSION"]
     return sorted({f for f in files if f.is_file()})
 
@@ -74,7 +89,7 @@ def fingerprint(cfg: Config) -> dict:
     return {
         "head": git(root, "rev-parse", "HEAD"),
         "dirty": None if status is None else bool(status),
-        "source": digest(source_files(root), root),
+        "source": digest(source_files(cfg), root),
         "config": digest([root / PROJECT_FILE], root),
         "air": (KIT_DIR / "VERSION").read_text(encoding="utf-8").strip(),
     }
@@ -108,7 +123,7 @@ def run_tests(cfg: Config) -> dict:
     """執行專案的測試指令（shell 字串，在專案根目錄）。沒設定＝skipped；逾時或啟動失敗＝error；非 0＝fail。"""
     result = {"name": "project-tests", "required": True, "command": cfg.test_command}
     if not cfg.test_command:
-        return {**result, "status": "skipped", "detail": "test-command 尚未設定（.air/project.toml 的 project.test-command）"}
+        return {**result, "status": "skipped", "detail": "測試指令尚未設定（.air/project.toml 的 [tests] command）"}
     start = time.monotonic()
     try:
         proc = subprocess.Popen(cfg.test_command, shell=True, cwd=cfg.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -121,7 +136,7 @@ def run_tests(cfg: Config) -> dict:
         _kill_tree(proc)
         output, _ = proc.communicate()
         return {**result, "status": "error", "output": tail(output or ""),
-                "detail": f"逾時（超過 {cfg.test_timeout} 秒；可在 .air/project.toml 設定 project.test-timeout）"}
+                "detail": f"逾時（超過 {cfg.test_timeout} 秒；可在 .air/project.toml 的 [tests] 設定 timeout）"}
     ms = int((time.monotonic() - start) * 1000)
     return {**result, "status": "pass" if proc.returncode == 0 else "fail", "exit": proc.returncode, "duration_ms": ms,
             "detail": f"exit {proc.returncode}（{ms} ms）", "output": tail(output or "")}
