@@ -273,6 +273,7 @@ class TestHookScripts(ProjectTestCase):
         r = self.run_hook_with_path(self.fake_bin(python_ok=True))
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("AIR001", r.stderr)
+        self.assertNotIn("cannot open", r.stderr)  # 沒有 .air/python 不是錯誤，不該吐 shell 的重導向訊息給模型看
         self.assertFalse((self.p.root / ".air" / "hook-errors.log").exists())
 
     @unittest.skipIf(sys.platform == "win32", "用 PATH 上的假指令模擬 Windows 的情況，本身需要 POSIX 的執行位元")
@@ -282,6 +283,7 @@ class TestHookScripts(ProjectTestCase):
         r = self.run_hook_with_path(bin_dir)
         self.assertEqual(r.returncode, 0, r.stderr)  # 放行，但不能靜默
         self.assertIn("找不到 Python", r.stderr)
+        self.assertNotIn("cannot open", r.stderr)
         log = (self.p.root / ".air" / "hook-errors.log").read_text(encoding="utf-8")
         self.assertIn("stop.sh\t找不到 Python", log)
         self.assertIn("hook 錯誤（24 小時內）：1 次", self.p.air("status").stdout)

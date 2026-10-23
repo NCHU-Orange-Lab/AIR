@@ -14,7 +14,8 @@
 air_py_ok() { "$@" -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; }
 
 find_python() {
-  saved=$(tr -d '\r' < "$1/.air/python" 2>/dev/null)
+  # 先測檔案在不在：dash 對 < 的重導向失敗會先印錯誤再處理 2>/dev/null，新 worktree 或第一次安裝會吐「cannot open .air/python」
+  saved=$([ -r "$1/.air/python" ] && tr -d '\r' < "$1/.air/python")
   if [ -n "$saved" ] && air_py_ok "$saved"; then echo "$saved"; return 0; fi
   for c in python3.14 python3.13 python3.12 python3.11 python3 python; do
     if command -v "$c" >/dev/null 2>&1 && air_py_ok "$c"; then echo "$c"; return 0; fi
