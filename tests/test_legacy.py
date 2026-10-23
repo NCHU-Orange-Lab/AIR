@@ -145,14 +145,15 @@ class TestBatchNumbers(ProjectTestCase):
         self.p.layer("steps", ok="x = 1\n")
         self.p.write("demo/a.py", "def f():\n    return 1\n")
         self.p.write("demo/b.py", "import os\n")
+        self.p.write("demo/sub/__init__.py", "")        # 套件標記有 2 個（再加 demo/__init__.py），轉接檔 1 個：數字不同才分得出欄位有沒有放錯
         self.p.commit("base")
         self.assertEqual(self.p.air("verify").returncode, 0)
         r = self.p.air("batch", "close")
         self.assertEqual(r.returncode, 0, r.stderr)
         e = self.p.history()[-1]
-        self.assertEqual((e["legacy_remaining"], e["legacy_shims"], e["legacy_markers"]), (1, 1, 1))
+        self.assertEqual((e["legacy_remaining"], e["legacy_shims"], e["legacy_markers"]), (1, 1, 2))
         self.assertIn("舊模組剩 1（另有 1 個轉接檔）", r.stdout)       # 套件標記不列：它永遠合法
-        self.assertEqual(project.status_data(self.p.cfg())["legacy_kinds"], {"logic": 1, "shim": 1, "marker": 1})
+        self.assertEqual(project.status_data(self.p.cfg())["legacy_kinds"], {"logic": 1, "shim": 1, "marker": 2})
 
 
 if __name__ == "__main__":
