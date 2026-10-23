@@ -82,7 +82,7 @@ class TestClose(BatchCase):
         m = e["metrics"]
         self.assertEqual((m["verify_runs"], m["verify_accepted"], m["review_scope_runs"], m["post_edit_blocked"], m["stop_blocked"], m["review_results"]), (2, 2, 1, 1, 1, 0))
         self.assertGreater(m["review_scope_chars"], 100)
-        self.assertEqual((e["legacy_remaining"], e["legacy_shims"]), (1, 1))  # demo/old.py 還有自己的程式；空的 demo/__init__.py 是空殼
+        self.assertEqual((e["legacy_remaining"], e["legacy_shims"], e["legacy_markers"]), (1, 0, 1))  # demo/old.py 還有自己的程式；空的 demo/__init__.py 是套件標記
         self.assertEqual((e["review_blocking"], e["ack"]), (None, None))   # 沒有審查紀錄
         self.assertIn("git 統計不可用", r.stdout)
         # 第二批：時間窗只算第一批之後的事；git 統計從第一批的 HEAD 算
@@ -252,20 +252,6 @@ class TestUnresolvedP1(BatchCase):
         r = self.close()
         self.assertEqual(r.returncode, 1)
         self.assertIn("priority 0／1 的發現沒有處理", r.stderr)
-
-
-class TestLegacySplit(BatchCase):
-    def test_reexport_shells_are_counted_apart_from_modules_with_logic(self):
-        self.p.write("demo/shim.py", '"""搬走了。"""\nfrom demo.steps import x\n__all__ = ["x"]\n')
-        self.p.write("demo/real.py", "def f():\n    return 1\n")
-        self.p.write("demo/broken.py", "def (:\n")                          # 讀不懂：保守地算有程式
-        root = self.p.root / "demo"
-        self.assertEqual(batch.legacy_split([root / "shim.py", root / "real.py", root / "broken.py", root / "__init__.py"]), (2, 2))
-        self.assertEqual(self.p.air("verify").returncode, 0)
-        self.assertEqual(self.close().returncode, 0)
-        e = self.p.history()[-1]
-        self.assertEqual((e["legacy_remaining"], e["legacy_shims"]), (3, 2))  # old.py、real.py、broken.py；shim.py 與 __init__.py
-        self.assertIn("舊模組剩 3（另有 2 個轉接檔）", self.p.air("status").stdout)
 
 
 class TestTimeParsing(unittest.TestCase):

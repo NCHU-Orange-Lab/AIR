@@ -529,7 +529,7 @@ class TestTestsInsideThePackage(ProjectTestCase):
         r = self.p.air("batch", "close")
         self.assertEqual(r.returncode, 0, r.stderr)
         e = self.p.history()[-1]
-        self.assertEqual((e["legacy_remaining"], e["legacy_shims"]), (1, 1))  # legacy.py；空的 demo/__init__.py
+        self.assertEqual((e["legacy_remaining"], e["legacy_shims"], e["legacy_markers"]), (1, 0, 1))  # legacy.py；空的 demo/__init__.py
 
 
 class TestUsage(ProjectTestCase):

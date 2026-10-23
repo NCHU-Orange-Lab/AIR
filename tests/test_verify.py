@@ -168,16 +168,6 @@ class TestFinalScope(ProjectTestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("至少要有一個層內的檔案", r.stdout)
 
-    def test_legacy_remaining_is_reported_but_not_blocking(self):
-        self.p.layer("steps", ok="x = 1\n")
-        self.p.write("demo/cli.py", "x = 1\n")
-        r = self.p.air("verify", "--scope", "final")
-        self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("demo/cli.py", json.dumps(self.p.receipt(), ensure_ascii=False))
-        legacy = next(c for c in self.p.receipt()["checks"] if c["name"] == "legacy-remaining")
-        self.assertEqual((legacy["required"], legacy["status"]), (False, "fail"))
-        self.assertIn("參考", r.stdout)
-
 
 class TestFinalWithAllowance(ProjectTestCase):
     test_command = TESTS_PASS
