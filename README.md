@@ -18,7 +18,7 @@ steps/                         純邏輯（不碰 I/O、時間、亂數）
 contracts/                     跨層的型別與介面
 ```
 
-並且用程式強制執行：AI 每次編輯檔案、每次要結束工作、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 複製的 skill；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。程式檢查不到的規則（例如 flow 不寫計算、adapter 關閉副作用），每批 commit 前由 AI 照 skill `air-review` 審查：`review` 指令用 git 界定這次的變更、列出要對照的規則，審查結果要通過格式與範圍的驗證才會被記錄。
+並且用程式強制執行：AI 每次編輯檔案、每次要結束工作（只看這個 session 動過的檔案）、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 複製的 skill；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。程式檢查不到的規則（例如 flow 不寫計算、adapter 關閉副作用），每批 commit 前由 AI 照 skill `air-review` 審查：`review` 指令用 git 界定這次的變更、列出要對照的規則，審查結果要通過格式與範圍的驗證才會被記錄。
 
 ## 怎麼開始
 
@@ -69,12 +69,10 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.air/history.jsonl` | 每次階段轉移、暫停與繼續的紀錄（時間、commit、方式、原因） | 是 |
 | `.air/paused.json` | 遷移暫停中的紀錄（時間、階段、原因）；`resume` 時移除 | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
-| `.air/sessions/` | hook 的注入紀錄（哪個 session 已附過哪一層的規則） | 否 |
+| `.air/sessions/` | 每個 session 的紀錄：已附過哪一層的規則（Codex）、編輯工具動過的檔案、開始時各層檔案的快照（結束前的檢查用） | 否 |
 | `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
-| `.air/last-check.json` | 結束前的檢查有違規時的完整清單（畫面只印前 10 組） | 否 |
 | `.air/metrics.jsonl` | 成本的代理指標：verify 幾次、審查範圍印了多少字、擋下幾次；`status` 顯示累計 | 否 |
-| `.air/verify.json` | 最近一次 `verify` 的結果，綁定當時的程式碼 | 否 |
-| `.air/review.json` | 最近一次語意審查的結果，綁定當時的變更 | 否 |
+| `.air/branches/<分支>/` | 這個分支的本機紀錄：`verify.json`（最近一次驗收，綁定當時的程式碼）、`review.json`（最近一次語意審查，每個檔案一筆）、`last-check.json`（結束前的檢查有違規時的完整清單）；切分支不會互相覆蓋 | 否 |
 | `docs/AIR-遷移報告.md` | AI 寫的分析、計畫與進度 | 是 |
 | commit 前檢查 | 有用 pre-commit 就加進 `.pre-commit-config.yaml`；沒有就裝 `.git/hooks/pre-commit` | `.git/hooks` 不進版本控制 |
 
@@ -93,10 +91,10 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 指令 | 做什麼 |
 |---|---|
-| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查 |
+| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查 |
 | `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
-| `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查，結果記在 `.air/verify.json`（會跑整套測試） |
+| `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試） |
 | `python3 AIR/air.py review --bundle` | 語意審查的範圍：每層要對照的規則（只列一次）、這次改到的檔案，加上每個待審檔案的差異（一次拿齊）；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
 | `python3 AIR/air.py survey --out docs/air-survey.md` | 盤點現有程式碼：完整表寫進檔案，畫面只印摘要 |
 | `python3 AIR/air.py pause --reason <原因>` | 暫停遷移（階段保留、分析／計畫階段的 `.py` 凍結解除、session 開始改附「暫停中」）；`resume` 繼續 |

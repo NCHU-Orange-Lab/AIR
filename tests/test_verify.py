@@ -78,7 +78,7 @@ class TestAccepted(ProjectTestCase):
         self.assertEqual(self.state(), "fresh")
 
     def test_corrupt_receipt_is_treated_as_none(self):
-        self.p.write(".air/verify.json", "{not json")
+        self.p.write(f"{verify.records_dir(self.p.root).relative_to(self.p.root).as_posix()}/verify.json", "{not json")
         self.assertIsNone(verify.load_receipt(self.p.root))
         self.assertIn("最近驗收：無", self.p.air("status").stdout)
 
@@ -170,7 +170,7 @@ class TestFingerprint(ProjectTestCase):
     git = True
 
     def test_head_and_dirty(self):
-        self.assertEqual(self.p.air("install").returncode, 0)  # 會把 .air/verify.json 加進 .gitignore
+        self.assertEqual(self.p.air("install").returncode, 0)  # 會把 .air/branches 加進 .gitignore
         self.p.layer("steps", ok="x = 1\n")
         head = self.p.commit("clean")
         self.assertEqual(self.p.air("verify").returncode, 0)
@@ -220,6 +220,49 @@ class TestFingerprint(ProjectTestCase):
         self.assertTrue(any(f.endswith("conf/base.yml") for f in files))
         self.assertFalse(any("experiments" in f for f in files))
         self.assertTrue(any(f.endswith("airkit/checks.py") for f in files))  # AIR 自己的 checker 仍在指紋裡
+
+
+class TestRecordsPerBranch(ProjectTestCase):
+    """報告 §4.3 d：verify.json、review.json 各只有一份，後寫的蓋掉先寫的；切分支之後紀錄也對不上。"""
+    test_command = TESTS_PASS
+    git = True
+
+    def git(self, *args) -> str:
+        import subprocess
+        return subprocess.run(["git", *args], cwd=self.p.root, capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
+
+    def test_each_branch_keeps_its_own_receipt(self):
+        self.p.layer("steps", ok="x = 1\n")
+        self.p.commit("base")
+        main = verify.branch_name(self.p.root)
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.assertEqual(self.p.receipt()["branch"], main)
+        self.assertTrue((self.p.root / ".air" / "branches" / main / "verify.json").exists())
+        status = self.p.air("status").stdout
+        self.assertIn(f"分支：{main}（本機紀錄在 .air/branches/{main}/）", status)
+        self.assertIn("最近驗收：通過", status)
+        self.git("checkout", "-q", "-b", "feature/x")
+        status = self.p.air("status").stdout
+        self.assertIn("分支：feature/x（本機紀錄在 .air/branches/feature_x/）", status)
+        self.assertIn("最近驗收：無", status)                       # 別的分支的紀錄不算
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.assertTrue((self.p.root / ".air" / "branches" / "feature_x" / "verify.json").exists())
+        self.assertIn("紀錄已寫入 .air/branches/feature_x/verify.json", self.p.air("verify").stdout)
+        self.git("checkout", "-q", main)
+        self.assertIn("最近驗收：通過", self.p.air("status").stdout)  # 回到 main，main 自己的紀錄還在而且仍然一致
+        self.assertEqual(json.loads(self.p.air("status", "--json").stdout)["branch"], main)
+
+    def test_detached_head_and_no_git_have_their_own_names(self):
+        self.p.layer("steps", ok="x = 1\n")
+        head = self.p.commit("base")
+        self.git("checkout", "-q", "--detach")
+        self.assertEqual(verify.branch_name(self.p.root), f"detached-{head[:12]}")
+        self.assertEqual(verify.branch_slug("feat/x y:z"), "feat_x_y_z")
+        from tests.helpers import Project
+        plain = Project()  # 沒有 git 的專案（Windows 上刪 .git 會碰到唯讀的物件檔，所以另開一個）
+        self.addCleanup(plain.cleanup)
+        self.assertEqual(verify.branch_name(plain.root), "no-git")
+        self.assertEqual(verify.records_dir(plain.root), plain.root / ".air" / "branches" / "no-git")
 
 
 if __name__ == "__main__":

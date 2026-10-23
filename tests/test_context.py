@@ -106,6 +106,45 @@ class TestInjection(ProjectTestCase):
         self.assertEqual(context.rule_name(self.p.root / "demo" / "legacy.py", cfg), None)
 
 
+class TestSessionRecord(ProjectTestCase):
+    """session 紀錄的三件事：rules（注入過的規則）、touched（編輯工具動過的檔案）、snapshot（開始時各層檔案的雜湊）。"""
+    phase = "migrating"
+
+    def setUp(self):
+        super().setUp()
+        self.p.layer("steps", a="x = 1\n")
+        self.cfg = self.p.cfg()
+
+    def test_touched_is_relative_posix_and_ignores_files_outside_the_project(self):
+        context.remember_touched(self.cfg.root, "s", [self.p.root / "demo" / "steps" / "a.py", "/etc/hosts", self.p.root / "README.md"])
+        context.remember_touched(self.cfg.root, "s", [self.p.root / "demo" / "steps" / "a.py"])  # 重複不重記
+        self.assertEqual(context.touched(self.cfg.root, "s"), ["README.md", "demo/steps/a.py"])
+        self.assertEqual(context.touched(self.cfg.root, "other"), [])
+
+    def test_snapshot_is_taken_once_and_reset_keeps_it_but_drops_rules(self):
+        self.assertTrue(context.take_snapshot(self.cfg, "s"))
+        self.assertFalse(context.take_snapshot(self.cfg, "s"))  # 已經有就不重拍（壓縮、恢復）
+        context.remember(self.cfg.root, "s", {"steps"})
+        context.remember_touched(self.cfg.root, "s", [self.p.root / "demo" / "steps" / "a.py"])
+        self.p.write("demo/steps/b.py", "y = 2\n")
+        context.reset(self.cfg.root, "s")
+        self.assertEqual(context.injected(self.cfg.root, "s"), set())
+        self.assertEqual(context.touched(self.cfg.root, "s"), ["demo/steps/a.py"])
+        edited, changed, has_snapshot = context.stop_targets(self.cfg, "s")
+        self.assertEqual(([p.name for p in edited], [p.name for p in changed], has_snapshot), (["a.py"], ["b.py"], True))
+        self.assertEqual(context.stop_targets(self.cfg, "never"), ([], [], False))
+        context.reset(self.cfg.root, "empty")  # 沒有紀錄的 session：reset 不留檔
+        self.assertFalse((self.p.root / ".air" / "sessions" / "empty.json").exists())
+
+    def test_post_edit_records_touched_for_both_hosts(self):
+        a = self.p.root / "demo" / "steps" / "a.py"
+        self.p.hook("post-edit", {"session_id": "s", "tool_name": "Edit", "tool_input": {"file_path": str(a)}})
+        patch = "*** Begin Patch\n*** Update File: demo/steps/a.py\n*** Add File: demo/flows/f.py\n*** End Patch"
+        self.p.hook("post-edit", {"session_id": "c", "tool_name": "apply_patch", "cwd": str(self.p.root), "tool_input": {"command": patch}}, host="codex")
+        self.assertEqual(context.touched(self.cfg.root, "s"), ["demo/steps/a.py"])
+        self.assertEqual(context.touched(self.cfg.root, "c"), ["demo/flows/f.py", "demo/steps/a.py"])
+
+
 class TestSessionStart(ProjectTestCase):
     def test_status_and_phase_guidance_are_injected(self):
         r = self.p.hook("session-start", {"session_id": "s1", "source": "startup"})

@@ -3,17 +3,25 @@ session 開始與壓縮後重置，並附上目前狀態。
 
 Claude Code 不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rules/air-<層>.md（帶 paths 前言，見 install.py），
 讀寫該層的檔案時由宿主自己載入，不啟動 Python（實測每次 Read 多一個 Python 行程，Windows 上約 0.36 秒）。
-規則仍只有 AIR/rules/ 一個來源。注入紀錄放在 .air/sessions/<session_id>.json（不進版本控制）。
+規則仍只有 AIR/rules/ 一個來源。
+
+.air/sessions/<session_id>.json（不進版本控制）記三件事：
+  rules     這個 session 已附過哪些層的規則（Codex）；session 開始與壓縮後清掉
+  touched   編輯工具動過的檔案（post-edit 記下）
+  snapshot  session 第一次開始時各層 .py 的內容雜湊：結束前用它找出「這個 session 開始後才變的檔案」，
+            不管是誰用什麼方式改的；別的 session 在這之前留下的半成品不算（實戰中 session B 什麼都沒改卻被擋下）
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
 from pathlib import Path
 
 from . import project
+from .checks import layer_files
 from .config import KIT_DIR, Config
 from .hosts import Host
 from .rules import name_for as rule_name  # noqa: F401 — 哪個檔案適用哪份規則，跟語意審查共用同一個判斷
@@ -40,22 +48,88 @@ def _state_file(root: Path, session_id: str) -> Path:
     return root / SESSIONS_DIR / f"{safe}.json"
 
 
-def injected(root: Path, session_id: str) -> set[str]:
+def _load(root: Path, session_id: str) -> dict:
     try:
-        return set(json.loads(_state_file(root, session_id).read_text(encoding="utf-8")).get("rules", []))
-    except (OSError, ValueError, AttributeError):
-        return set()
+        data = json.loads(_state_file(root, session_id).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save(root: Path, session_id: str, state: dict) -> None:
+    path = _state_file(root, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _rel(root: Path, path: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None  # 專案外的檔案不記
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def injected(root: Path, session_id: str) -> set[str]:
+    return set(_load(root, session_id).get("rules", []))
 
 
 def remember(root: Path, session_id: str, names: set[str]) -> None:
-    path = _state_file(root, session_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"rules": sorted(injected(root, session_id) | names)}, ensure_ascii=False) + "\n", encoding="utf-8")
+    state = _load(root, session_id)
+    state["rules"] = sorted(set(state.get("rules", [])) | set(names))
+    _save(root, session_id, state)
+
+
+def touched(root: Path, session_id: str) -> list[str]:
+    return list(_load(root, session_id).get("touched", []))
+
+
+def remember_touched(root: Path, session_id: str, paths) -> None:
+    """post-edit：記下這個 session 用編輯工具動過的檔案（相對根目錄）。"""
+    rels = {r for r in (_rel(root, Path(p)) for p in paths) if r}
+    if not rels:
+        return
+    state = _load(root, session_id)
+    state["touched"] = sorted(set(state.get("touched", [])) | rels)
+    _save(root, session_id, state)
+
+
+def take_snapshot(cfg: Config, session_id: str) -> bool:
+    """session 第一次開始時記下各層 .py 的內容雜湊；已經有就不重拍（壓縮、恢復都是同一個 session）。回傳有沒有拍。"""
+    state = _load(cfg.root, session_id)
+    if "snapshot" in state:
+        return False
+    state["snapshot"] = {_rel(cfg.root, f): _sha(f) for la in cfg.layers.values() for f in layer_files(la)}
+    _save(cfg.root, session_id, state)
+    return True
+
+
+def stop_targets(cfg: Config, session_id: str) -> tuple[list[Path], list[Path], bool]:
+    """結束前要檢查的檔案：(編輯工具記下的, session 開始後內容變了的層內 .py, 有沒有快照)。
+    用 Bash 改的檔案靠快照抓；別的 session 在這個 session 開始前留下的半成品不在裡面。"""
+    state = _load(cfg.root, session_id)
+    edited = [cfg.root / r for r in state.get("touched", [])]
+    snapshot = state.get("snapshot")
+    changed = []
+    if isinstance(snapshot, dict):
+        for la in cfg.layers.values():
+            for f in layer_files(la):
+                if snapshot.get(_rel(cfg.root, f)) != _sha(f):
+                    changed.append(f)
+    return edited, changed, isinstance(snapshot, dict)
 
 
 def reset(root: Path, session_id: str) -> None:
-    """session 開始（含壓縮、恢復）：清掉這個 session 的紀錄，順便清掉太久沒動的。"""
-    _state_file(root, session_id).unlink(missing_ok=True)
+    """session 開始（含壓縮、恢復）：清掉規則注入的紀錄（下次碰到某層會重新附），保留動過的檔案與快照；順便清掉太久沒動的。"""
+    state = _load(root, session_id)
+    state.pop("rules", None)
+    if state:
+        _save(root, session_id, state)
+    else:
+        _state_file(root, session_id).unlink(missing_ok=True)
     cutoff = time.time() - KEEP_DAYS * 86400
     for old in (root / SESSIONS_DIR).glob("*.json") if (root / SESSIONS_DIR).is_dir() else []:
         try:

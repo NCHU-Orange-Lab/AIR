@@ -5,7 +5,7 @@
         規則每層只列一次；上次審過、內容沒變的檔案只列名字，沿用上次的發現，不必重審
   驗證  模型交回的結果：規則存在、適用該層、不是 check 負責的、行號落在改到的行附近、信心與優先級在範圍內、
         結論與發現一致（含沿用的發現）
-  紀錄  通過驗證的結果寫進 .air/review.json：每個檔案一筆，綁定該檔內容的 sha256；之後哪個檔案又改了，只有那個檔案要重審
+  紀錄  通過驗證的結果寫進 .air/branches/<分支>/review.json：每個檔案一筆，綁定該檔內容的 sha256；之後哪個檔案又改了，只有那個檔案要重審
 判斷本身由模型做（做法在 skill air-review）。結果只是參考：不擋 commit，也不能推翻 check 或 verify 的失敗。
 
 為什麼每個檔案一筆：原本整批一個指紋，修掉一個發現就整批作廢、全部重讀，是實戰中最大的 token 放大器之一。
@@ -22,7 +22,7 @@ from . import rules, verify
 from .checks import rel
 from .config import Config
 
-RECORD_FILE = Path(".air") / "review.json"
+RECORD_NAME = "review.json"  # 放在 verify.records_dir（依分支分開）
 SCHEMA = "air.review.v2"
 SCOPE_SCHEMA = "air.review-scope.v2"
 MIN_CONFIDENCE = 0.5   # 不到這個信心的發現不收（不確定就不報）
@@ -351,12 +351,12 @@ def record(cfg: Config, sc: dict, data: dict, findings: list[dict]) -> dict:
         "overall": "fail" if blocking else "pass", "explanation": data["explanation"],
         "reused": sum(1 for f in sc["files"] if f["reused"] and f["path"] not in by_path and f["path"] not in rereviewed),
     }
-    verify.write_json(cfg.root / RECORD_FILE, rec)
+    verify.write_json(verify.records_dir(cfg.root) / RECORD_NAME, rec)
     return rec
 
 
 def load_record(root: Path) -> dict | None:
-    rec = verify.load_json(root / RECORD_FILE, SCHEMA)
+    rec = verify.load_json(verify.records_dir(root) / RECORD_NAME, SCHEMA)
     return rec if rec and isinstance(rec.get("files"), dict) else None
 
 
@@ -410,5 +410,5 @@ def format_result(rec: dict) -> str:
         lines.append(f"  （{rec['reused']} 個檔案沿用上次審查的發現）")
     if rec["blocking"]:
         lines.append("priority 0／1 的發現必須處理，或向使用者說明為什麼不處理；處理後只有改過的檔案要重審。")
-    lines.append(f"紀錄已寫入 {RECORD_FILE.as_posix()}（每個檔案綁定它的內容；之後哪個檔案又改了，只有那個檔案要重審）")
+    lines.append(f"紀錄已寫入 {verify.BRANCHES_DIR.as_posix()}/<分支>/{RECORD_NAME}（每個檔案綁定它的內容；之後哪個檔案又改了，只有那個檔案要重審）")
     return "\n".join(lines)

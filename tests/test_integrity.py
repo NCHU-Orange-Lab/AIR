@@ -83,7 +83,7 @@ class TestManifest(ProjectTestCase):
         payload = json.dumps({"tool_input": {"file_path": str(self.p.root / "demo" / "steps" / "ok.py")}})
         r = self.p.air("hook", "post-edit", stdin=payload)
         self.assertEqual(r.returncode, 0)
-        r = self.p.air("hook", "stop", stdin="{}")  # 結束前的全專案檢查才抓
+        r = self.p.air("hook", "stop", stdin="{}")  # 結束前的檢查才抓（AIR009 不分 session）
         self.assertEqual(r.returncode, 2)
         self.assertIn("AIR009", r.stderr)
 
