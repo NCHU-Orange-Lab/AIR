@@ -17,6 +17,38 @@ EXPECTED_HOOKS = [("SessionStart", None), ("PreToolUse", "Bash"), ("PreToolUse",
 RULE_FILES = [f"air-{n}.md" for n in ("adapters", "contracts", "flows", "main", "steps", "storage", "tests")]
 
 
+class TestTestsDirDetection(ProjectTestCase):
+    """安裝時決定 tests-dir：根目錄的 tests 優先，其次 test，然後是套件裡面的 tests、test；只認真的放了 .py 的目錄。"""
+
+    def toml(self) -> str:
+        (self.p.root / ".air" / "project.toml").unlink()
+        self.assertEqual(install.write_project_file(self.p.root, "demo", "demo"), "created")
+        return (self.p.root / ".air" / "project.toml").read_text(encoding="utf-8")
+
+    def test_root_tests_first_then_test_then_inside_the_package(self):
+        self.assertIsNone(install.suggest_tests_dir(self.p.root, "demo"))
+        self.p.write("demo/tests/test_a.py", "")
+        self.assertEqual(install.suggest_tests_dir(self.p.root, "demo"), "demo/tests")
+        self.p.write("test/test_b.py", "")
+        self.assertEqual(install.suggest_tests_dir(self.p.root, "demo"), "test")
+        self.p.write("tests/test_c.py", "")
+        self.assertEqual(install.suggest_tests_dir(self.p.root, "demo"), "tests")
+
+    def test_an_empty_or_non_python_directory_does_not_count(self):
+        (self.p.root / "tests").mkdir()
+        self.p.write("demo/tests/README.md", "x")
+        self.assertIsNone(install.suggest_tests_dir(self.p.root, "demo"))
+
+    def test_project_file_gets_the_detected_directory_or_the_default(self):
+        self.assertIn('tests-dir = "tests"', self.toml())
+        self.p.write("demo/tests/test_a.py", "")
+        self.assertIn('tests-dir = "demo/tests"', self.toml())
+
+    def test_src_layout_package_dir(self):
+        self.assertEqual(install.tests_dir_candidates("src/demo/"), ["tests", "test", "src/demo/tests", "src/demo/test"])
+        self.assertEqual(install.tests_dir_candidates(""), ["tests", "test"])
+
+
 class TestInstructions(ProjectTestCase):
     def test_new_claude_md_imports_agents_md_which_holds_the_full_rules(self):
         install.ensure_instructions(self.p.root)

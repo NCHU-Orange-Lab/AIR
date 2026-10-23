@@ -351,7 +351,7 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
     if paths is None:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
         if cfg.package_dir.is_dir():
-            report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None and not cfg.is_excluded(f)]
+            report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None and not cfg.is_excluded(f) and not cfg.is_test_file(f)]
         report.hard += structure_violations(cfg)  # 最晚在這裡（結束前、commit 前）抓到
     else:
         targets = []

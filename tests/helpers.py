@@ -25,7 +25,7 @@ from airkit.config import Config, load  # noqa: E402
 PROJECT_TOML = """[project]
 package = "demo"
 package-dir = "demo"
-tests-dir = "tests"
+tests-dir = "{tests_dir}"
 
 [imports]
 extra = [{extra}]
@@ -54,12 +54,12 @@ class Project:
     """暫存目錄裡的範例專案：AIR/ 的複本、.air/project.toml、套件 demo/。"""
 
     def __init__(self, phase: str = "installed", allow_legacy: str = "", extra: str = "", git: bool = False,
-                 test_command: str = "", test_timeout: int = 600, exclude: str = "", stop_scope: str = "session", extra_toml: str = "", test_results: str = ""):
+                 test_command: str = "", test_timeout: int = 600, exclude: str = "", stop_scope: str = "session", extra_toml: str = "", test_results: str = "", tests_dir: str = "tests"):
         self.root = Path(tempfile.mkdtemp(prefix="air-test-")).resolve()
         shutil.copytree(KIT, self.root / "AIR", ignore=shutil.ignore_patterns(".git", "tests", "__pycache__"))
         self.write(".air/project.toml", PROJECT_TOML.format(
             phase=phase, allow=allow_legacy, extra=extra, test_command=json.dumps(test_command), test_timeout=test_timeout, exclude=exclude,
-            stop_scope=stop_scope, extra_toml=extra_toml, results_line=f'results = "{test_results}"' if test_results else ""))
+            stop_scope=stop_scope, extra_toml=extra_toml, tests_dir=tests_dir, results_line=f'results = "{test_results}"' if test_results else ""))
         (self.root / "demo").mkdir()
         (self.root / "demo" / "__init__.py").write_text("", encoding="utf-8")
         if git:
@@ -153,11 +153,12 @@ class ProjectTestCase(unittest.TestCase):
     stop_scope = "session"
     extra_toml = ""
     test_results = ""
+    tests_dir = "tests"
 
     def setUp(self) -> None:
         self.p = Project(phase=self.phase, allow_legacy=self.allow_legacy, extra=self.extra, git=self.git,
                          test_command=self.test_command, test_timeout=self.test_timeout, exclude=self.exclude, stop_scope=self.stop_scope,
-                         extra_toml=self.extra_toml, test_results=self.test_results)
+                         extra_toml=self.extra_toml, test_results=self.test_results, tests_dir=self.tests_dir)
         self.addCleanup(self.p.cleanup)
 
 

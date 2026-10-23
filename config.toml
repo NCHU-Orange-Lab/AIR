@@ -16,6 +16,10 @@ common = [
   "itertools", "functools", "operator", "copy",
   "math", "statistics", "decimal", "fractions",
   "re", "string", "json", "datetime",
+  # 公開介面完全沒有副作用的標準庫（字串、HTML、編碼、雜湊、資料結構）。前綴比對：寫 `from urllib.parse import ...`
+  # 或 `import urllib.parse`；`import urllib` 不符合 urllib.parse，仍會被擋。
+  "html", "urllib.parse", "textwrap", "unicodedata", "fnmatch", "hashlib", "base64", "binascii",
+  "heapq", "bisect", "difflib", "types", "contextlib", "numbers",
   "pandas", "numpy",
 ]
 

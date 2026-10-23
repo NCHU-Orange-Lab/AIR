@@ -5,7 +5,7 @@ import subprocess
 import unittest
 
 from tests.helpers import TESTS_FAIL, TESTS_PASS, ProjectTestCase, remove_git_dir
-from airkit import project
+from airkit import project, verify
 
 REPORT = "docs/AIR-遷移報告.md"
 
@@ -484,6 +484,50 @@ class TestExclude(ProjectTestCase):
         r = self.p.air("check", "--json")
         self.assertNotIn("experiments", r.stdout)
         self.assertEqual(json.loads(self.p.air("status", "--json").stdout)["exclude"], ["demo/experiments", "demo/scratch.py"])
+
+
+class TestTestsInsideThePackage(ProjectTestCase):
+    """測試放在套件裡面（pelican/tests 那種）：tests-dir 指向它，它們就不算舊模組，但仍在驗收指紋裡。"""
+    phase = "migrating"
+    git = True
+    tests_dir = "demo/tests"
+    test_command = TESTS_PASS
+
+    def setUp(self):
+        super().setUp()
+        self.p.layer("steps", ok="x = 1\n")
+        self.p.write("demo/legacy.py", "def f():\n    return 1\n")
+        self.p.write("demo/tests/__init__.py", "")
+        self.p.write("demo/tests/test_a.py", "def test_a():\n    assert 1\n")
+        self.p.write("demo/tests/sub/test_b.py", "def test_b():\n    assert 1\n")
+
+    def test_not_legacy_not_surveyed_but_mentioned(self):
+        cfg = self.p.cfg()
+        rows = project.survey_rows(cfg)
+        self.assertNotIn("demo.tests", " ".join(r["module"] for r in rows))
+        self.assertIn("demo.legacy", [r["module"] for r in rows])
+        self.assertEqual(project.tests_in_package(cfg), 3)
+        summary = project.survey_summary(cfg, rows, None)
+        self.assertIn("測試 3 個模組在 tests-dir（demo/tests）：不盤點，也不算舊模組", summary)
+        self.assertIn("測試 3 個模組在 tests-dir", project.survey(cfg, rows))
+        status = self.p.air("status").stdout
+        self.assertIn("舊程式碼模組 2 個", status)  # demo/__init__.py 與 legacy.py
+        legacy = json.loads(self.p.air("check", "--json").stdout)["legacy"]
+        self.assertEqual(sorted(legacy), ["demo/__init__.py", "demo/legacy.py"])
+
+    def test_still_in_the_verify_fingerprint(self):
+        files = {f.relative_to(self.p.root).as_posix() for f in verify.source_files(self.p.cfg()) if f.is_relative_to(self.p.root)}
+        self.assertTrue({"demo/tests/test_a.py", "demo/tests/sub/test_b.py"} <= files)
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.p.write("demo/tests/test_a.py", "def test_a():\n    assert 2\n")  # 只改測試：驗收紀錄要過期
+        self.assertIn("已過期", self.p.air("status").stdout)
+
+    def test_batch_close_does_not_count_the_tests(self):
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        r = self.p.air("batch", "close")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        e = self.p.history()[-1]
+        self.assertEqual((e["legacy_remaining"], e["legacy_shims"]), (1, 1))  # legacy.py；空的 demo/__init__.py
 
 
 class TestUsage(ProjectTestCase):
