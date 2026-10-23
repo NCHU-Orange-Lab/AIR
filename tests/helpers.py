@@ -159,3 +159,14 @@ class ProjectTestCase(unittest.TestCase):
                          test_command=self.test_command, test_timeout=self.test_timeout, exclude=self.exclude, stop_scope=self.stop_scope,
                          extra_toml=self.extra_toml, test_results=self.test_results)
         self.addCleanup(self.p.cleanup)
+
+
+def remove_git_dir(root: Path) -> None:
+    """刪掉 .git：Windows 上 git 的物件檔是唯讀的，shutil.rmtree 會 PermissionError，要先放寬權限再刪。"""
+    def _retry(func, path, _exc):
+        os.chmod(path, 0o700)
+        func(path)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(root / ".git", onexc=_retry)
+    else:
+        shutil.rmtree(root / ".git", onerror=_retry)

@@ -4,7 +4,7 @@ import json
 import subprocess
 import unittest
 
-from tests.helpers import TESTS_FAIL, TESTS_PASS, ProjectTestCase
+from tests.helpers import TESTS_FAIL, TESTS_PASS, ProjectTestCase, remove_git_dir
 from airkit import project
 
 REPORT = "docs/AIR-遷移報告.md"
@@ -90,8 +90,7 @@ class TestLayersCollision(ProjectTestCase):
         self.assertEqual((self.p.root / "demo" / "main" / "__init__.py").read_text(encoding="utf-8"), self.MAIN)
 
     def test_adopt_without_git_falls_back_to_rename(self):
-        import shutil
-        shutil.rmtree(self.p.root / ".git")
+        remove_git_dir(self.p.root)
         r = self.p.air("layers", "--adopt-module", "main")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((self.p.root / "demo" / "main" / "__init__.py").exists())
@@ -99,8 +98,7 @@ class TestLayersCollision(ProjectTestCase):
 
     def test_adopt_without_git_replaces_an_existing_empty_init(self):
         # Windows 的 Path.rename 遇到既有檔案會失敗，所以採用之前要先刪掉空的 __init__.py（POSIX 上 rename 會直接覆蓋，看不出差別）
-        import shutil
-        shutil.rmtree(self.p.root / ".git")
+        remove_git_dir(self.p.root)
         (self.p.root / "demo" / "main").mkdir()
         (self.p.root / "demo" / "main" / "__init__.py").write_text("", encoding="utf-8")
         r = self.p.air("layers", "--adopt-module", "main")
