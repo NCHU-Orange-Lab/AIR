@@ -492,11 +492,13 @@ class TestTestsInsideThePackage(ProjectTestCase):
     git = True
     tests_dir = "demo/tests"
     test_command = TESTS_PASS
+    exclude = '"demo/tests/fixtures"'
 
     def setUp(self):
         super().setUp()
         self.p.layer("steps", ok="x = 1\n")
         self.p.write("demo/legacy.py", "def f():\n    return 1\n")
+        self.p.write("demo/tests/fixtures/data.py", "X = 1\n")  # 測試目錄裡又被排除的：不算
         self.p.write("demo/tests/__init__.py", "")
         self.p.write("demo/tests/test_a.py", "def test_a():\n    assert 1\n")
         self.p.write("demo/tests/sub/test_b.py", "def test_b():\n    assert 1\n")

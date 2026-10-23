@@ -60,6 +60,8 @@ class TestDoctor(ProjectTestCase):
         self.assertIn("不凍結、不進驗收指紋", w)
         self.set_project('exclude = ["demo/tests", ', 'exclude = ["demo/experiments", ')   # 排除別的路徑：不提醒
         self.assertEqual(self.dir_warnings(), [])
+        self.set_project('exclude = ["demo/experiments", ', 'exclude = ["demo/test", ')    # demo/test 不是 demo/tests 的上層，只是前綴相同
+        self.assertEqual(self.dir_warnings(), [])
 
     def test_json(self):
         data = json.loads(self.p.air("doctor", "--json").stdout)
