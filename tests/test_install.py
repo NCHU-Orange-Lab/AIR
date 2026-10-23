@@ -327,6 +327,21 @@ class TestFullInstall(ProjectTestCase):
         self.assertEqual(r2.returncode, 0)
         self.assertIn("unchanged", r2.stdout)
 
+    def test_dirty_worktree_is_fine_and_the_commit_list_only_has_air_paths(self):
+        # 報告 §4.8：730 個未追蹤的實驗檔，「安裝前要乾淨」等於裝不了。改成列出安裝動到的路徑，commit 時只加這些
+        self.p.write("scripts/exp1.py", "print(1)\n")
+        self.p.write("notes.txt", "wip\n")
+        r = self.p.air("install")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = next(l for l in r.stdout.splitlines() if "commit 時只加這些" in l)
+        listed = line.split("：", 1)[1].split()
+        for expected in ("AIR", ".air/project.toml", ".air/.gitignore", "CLAUDE.md", "AGENTS.md", ".claude/settings.json",
+                         ".claude/skills", ".claude/rules", ".codex/hooks.json", ".agents/skills"):
+            self.assertIn(expected, listed, line)
+        self.assertNotIn("scripts/exp1.py", listed)
+        self.assertNotIn("notes.txt", listed)
+        self.assertEqual(install.commit_paths(self.p.root, [hosts.CLAUDE]), [p for p in listed if not p.startswith((".codex", ".agents"))])
+
     def test_host_option_limits_what_is_installed(self):
         r = self.p.air("install", "--host", "claude")
         self.assertEqual(r.returncode, 0, r.stderr)

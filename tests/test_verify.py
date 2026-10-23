@@ -88,7 +88,7 @@ class TestNoTestCommand(ProjectTestCase):
         self.p.layer("steps", ok="x = 1\n")
         r = self.p.air("verify")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("test-command 尚未設定", r.stdout)
+        self.assertIn("測試指令尚未設定", r.stdout)
         receipt = self.p.receipt()
         self.assertFalse(receipt["accepted"])
         self.assertEqual(receipt["checks"][1]["status"], "skipped")
@@ -186,6 +186,40 @@ class TestFingerprint(ProjectTestCase):
         before = verify.fingerprint(self.p.cfg())["source"]
         self.p.write("demo/steps/untracked.py", "z = 3\n")
         self.assertNotEqual(verify.fingerprint(self.p.cfg())["source"], before)
+
+    def test_scripts_outside_the_package_do_not_touch_the_fingerprint(self):
+        # 報告 §4.3 b：verify 剛通過，另一個 session 新增 scripts/exp_hotspot_probe.py，紀錄立刻過期；730 個未追蹤檔一直在變，final 驗收幾乎拿不到
+        self.p.layer("steps", ok="x = 1\n")
+        self.p.commit("base")
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.p.write("scripts/exp_hotspot_probe.py", "print(1)\n")
+        self.p.write("notebooks/x.py", "y = 2\n")
+        self.assertIn("最近驗收：通過（batch", self.p.air("status").stdout)
+        self.assertIn("與目前程式碼一致", self.p.air("status").stdout)
+        self.p.write("tests/test_new.py", "def test_x():\n    assert 1\n")  # 測試目錄算
+        self.assertIn("已過期", self.p.air("status").stdout)
+
+    def test_fingerprint_extra_counts_and_excluded_paths_do_not(self):
+        self.p.layer("steps", ok="x = 1\n")
+        self.p.write("demo/experiments/try.py", "a = 1\n")
+        self.p.write("conftest.py", "import os\n")
+        self.p.write("conf/base.yml", "a: 1\n")
+        toml = self.p.root / ".air" / "project.toml"
+        toml.write_text(toml.read_text(encoding="utf-8").replace("exclude = []", 'exclude = ["demo/experiments"]')
+                        + '\n[verify]\nfingerprint-extra = ["conftest.py", "conf"]\n', encoding="utf-8")
+        self.p.commit("base")
+        before = verify.fingerprint(self.p.cfg())["source"]
+        self.p.write("demo/experiments/try.py", "a = 2\n")
+        self.assertEqual(verify.fingerprint(self.p.cfg())["source"], before)  # exclude 的路徑不算
+        self.p.write("conftest.py", "import sys\n")
+        after_conftest = verify.fingerprint(self.p.cfg())["source"]
+        self.assertNotEqual(after_conftest, before)
+        self.p.write("conf/base.yml", "a: 2\n")                                 # 目錄裡不是 .py 的檔案也算
+        self.assertNotEqual(verify.fingerprint(self.p.cfg())["source"], after_conftest)
+        files = [f.as_posix() for f in verify.source_files(self.p.cfg())]  # Windows 的分隔符是反斜線，比對用 posix
+        self.assertTrue(any(f.endswith("conf/base.yml") for f in files))
+        self.assertFalse(any("experiments" in f for f in files))
+        self.assertTrue(any(f.endswith("airkit/checks.py") for f in files))  # AIR 自己的 checker 仍在指紋裡
 
 
 if __name__ == "__main__":

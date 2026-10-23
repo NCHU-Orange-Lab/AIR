@@ -89,6 +89,15 @@ class TestDoctor(ProjectTestCase):
         self.assertEqual(self.p.air("install").returncode, 0)
         self.assertFalse(any("pre_read.sh" in w for w in self.levels()["warn"]))
 
+    def test_old_test_command_keys_are_a_note(self):
+        self.assertFalse(any("test-command" in w for w in self.levels()["warn"]))
+        toml = self.p.root / ".air" / "project.toml"
+        toml.write_text(toml.read_text(encoding="utf-8").replace("[tests]\ncommand", "[tests]\n#command")
+                        .replace('tests-dir = "tests"', 'tests-dir = "tests"\ntest-command = "pytest -q"'), encoding="utf-8")
+        levels = self.levels()
+        self.assertEqual(levels["fail"], [])
+        self.assertTrue(any("project.test-command" in w and "[tests]" in w for w in levels["warn"]))
+
     def test_legacy_hook_form_is_a_note(self):
         settings = self.p.root / ".claude" / "settings.json"
         data = json.loads(settings.read_text(encoding="utf-8"))

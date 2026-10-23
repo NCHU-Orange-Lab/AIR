@@ -11,7 +11,8 @@ description: 想新增、修改、放寬 AIR 規範時使用，包括白名單�
 |---|---|---|
 | 純的層多允許一個外部模組（例如 scipy） | `.air/project.toml` 的 `imports.extra` | 使用者同意後才改 |
 | 遷移期間暫時允許某層 import 舊模組 | `.air/project.toml` 的 `migration.allow-legacy`（要寫原因） | 使用者同意後才改 |
-| 測試指令、套件位置 | `.air/project.toml` 的 `project` | 使用者確認後才改 |
+| 測試指令、套件位置 | `.air/project.toml` 的 `[tests]`、`project` | 使用者確認後才改 |
+| 把實驗區、腳本、筆記本排除在 AIR 之外（不凍結、不進指紋、不盤點） | `.air/project.toml` 的 `migration.exclude`（目錄或檔案，可寫 `dir/**`） | 使用者同意後才改 |
 | 規則本身（各層規則、禁用清單、檢查邏輯、skills） | **不要在這個專案裡改 `AIR/`** | 回到 AIR-dev 開發 repo 修改，再更新到各個專案 |
 
 `AIR/` 是外部帶進來的套件，更新時會被整包換掉，在專案裡的修改都會遺失。專案裡由 AIR 複製的 skill（`.claude/skills/air-*`、`.agents/skills/air-*`）也一樣，不要手動修改。這些路徑用編輯工具改會被 hook 擋下；用其他方式改了，結束前與 commit 前會回報 AIR009。

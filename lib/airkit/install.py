@@ -510,6 +510,20 @@ def remove_commit_check(root: Path) -> str:
 
 # ── 對外 ──
 
+def commit_paths(root: Path, selected: list[hosts.Host]) -> list[str]:
+    """安裝建立或修改、要進版本控制的路徑：commit 時只加這些，工作樹其他未提交的東西不用先清掉
+    （實戰中有 730 個未追蹤的實驗檔，「安裝前要乾淨」等於裝不了）。"""
+    out = ["AIR", PROJECT_FILE.as_posix(), ".air/.gitignore"]
+    for p in (claude_md_path(root), root / "AGENTS.md", root / ".pre-commit-config.yaml"):
+        if p.exists() and BEGIN in p.read_text(encoding="utf-8", errors="replace"):
+            out.append(p.relative_to(root).as_posix())
+    for host in selected:
+        for d in (host.hooks_file, host.skills_dir, host.rules_dir):
+            if d and (root / d).exists():
+                out.append(d.as_posix())
+    return out
+
+
 def _skill_lines(root: Path, host: hosts.Host) -> list[str]:
     installed, skipped = ensure_skills(root, host)
     return ([f"{host.skills_dir.as_posix()}/：{'、'.join(installed)}"] if installed else []) + skipped
@@ -548,6 +562,7 @@ def install(root: Path, package: str | None, package_dir: str | None, host_names
             lines += run()
         except (OSError, ValueError, ConfigError) as e:
             lines.append(f"{FAILED}{label}：{describe_error(e)}")
+    lines.append("commit 時只加這些（工作樹不用先清乾淨，其他未提交的檔案照舊）：" + " ".join(commit_paths(root, selected)))
     return lines
 
 

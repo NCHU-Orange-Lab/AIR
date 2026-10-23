@@ -1,7 +1,8 @@
 """判斷一行 shell 指令是否在略過 commit 前的檢查。PreToolUse（Bash）hook 使用。
 
 用 shlex 解析，避免把 commit 訊息裡的文字誤判成選項。
-`bash -c "..."`、`sh -lc '...'` 裡的指令會拆開再檢查（最多三層）；解析不了的指令若含可疑字面值就保守擋下。
+`bash -c "..."`、`sh -lc '...'` 裡的指令會拆開再檢查（最多三層）；`ssh host '...'` 的遠端指令也一樣（遠端的 clone 不經過 AIR，
+只能擋本機發出去的寫法；要可信還是以 CI 為準）。解析不了的指令若含可疑字面值就保守擋下。
 這是盡力而為的防護：變數展開、腳本檔（`sh run.sh`）裡的指令無法判斷；權威的關卡是 commit 前檢查。
 """
 
@@ -17,6 +18,8 @@ LONG_WITH_ARG = {
 GIT_GLOBAL_WITH_ARG = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 SEPARATORS = {";", "&&", "||", "|", "&"}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+REMOTE = {"ssh"}
+SSH_WITH_ARG = set("bcDEeFIiJLlmOopQRSWw")  # ssh 會吃下一個參數的選項（-p 22、-i key…）；-p22 這種黏在一起的也認得
 MAX_DEPTH = 3
 # git config 的唯讀用法（查 core.hooksPath 沒問題）與會改值的用法
 CONFIG_READ = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "get", "list"}
@@ -95,6 +98,22 @@ def shell_script(rest: list[str]) -> str | None:
     return None
 
 
+def remote_script(rest: list[str]) -> str | None:
+    """`ssh [選項] 主機 指令…` 裡的遠端指令（接成一條）；不是 ssh、或沒有指令（互動登入）回傳 None。"""
+    if rest[0].rsplit("/", 1)[-1] not in REMOTE:
+        return None
+    i = 1
+    while i < len(rest) and rest[i].startswith("-") and rest[i] != "-":
+        opt = rest[i]
+        if opt == "--":
+            i += 1
+            break
+        i += 2 if (len(opt) == 2 and opt[1] in SSH_WITH_ARG) else 1
+    if i + 1 >= len(rest):
+        return None
+    return " ".join(rest[i + 1:])
+
+
 def check_hook_removal(prog: str, args: list[str]) -> str | None:
     if prog == "rm" and any(".git/hooks" in a for a in args):
         return "不能刪除 git hook。"
@@ -144,7 +163,7 @@ def check(command: str, depth: int = 0) -> str | None:
         return f"這行指令無法解析，而且含有 `{hit}`，先擋下。" if hit else None
     for tokens in commands:
         _env, rest = strip_env(tokens)
-        script = shell_script(rest) if rest and depth < MAX_DEPTH else None
+        script = (shell_script(rest) or remote_script(rest)) if rest and depth < MAX_DEPTH else None
         reason = check(script, depth + 1) if script is not None else check_one(tokens)
         if reason:
             return reason

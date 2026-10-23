@@ -23,7 +23,7 @@ contracts/                     跨層的型別與介面
 ## 怎麼開始
 
 1. 把 `AIR/` 資料夾複製到專案根目錄（git repo 的根目錄）。**不要帶著 `.git`**：從 AIR-dev 複製時，只複製裡面的 `AIR/` 資料夾。
-2. 確認 `git status` 是乾淨的。
+2. 工作樹不用乾淨：安裝程式最後會列出它建立或修改的檔案，commit 時只加那些。
 3. 對 AI 說：**「照 AIR/START.md 安裝」**
 
 AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**：
@@ -37,7 +37,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 5. 逐批遷移 | 每一批：先補行為保護測試 → 搬移 → `verify`（測試＋架構檢查）通過 → 語意審查（`air-review`）→ commit | 每批結束時核准下一批 |
 | 6. 收尾 | 移除過渡用的轉接，`verify --scope final` 通過 | 確認完成 |
 
-遷移期間，還沒搬進任何層的程式屬於「舊程式碼」，不受檢查，專案可以照常運作。
+遷移期間，還沒搬進任何層的程式屬於「舊程式碼」，不受檢查，專案可以照常運作。不打算遷移的實驗區、腳本、筆記本，經你同意寫進 `.air/project.toml` 的 `migration.exclude`：它們不凍結、不進驗收指紋、不列進盤點，留在外面算正式的結局。分析、計畫階段的程式凍結只涵蓋套件目錄與測試目錄。
 
 階段只能一次前進一格，而且有前置條件（例如進入 `done` 需要一份剛通過、程式碼沒再改過的 `verify --scope final` 紀錄）；AI 不能直接把階段設成 `done`。每次轉移都記在 `.air/history.jsonl`。
 
@@ -65,7 +65,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.claude/rules/air-<層>.md` | 各層規則（`AIR/rules/<層>.md` 的複本，前面加 `paths` 指向該層目錄）；Claude Code 讀寫該層時自動載入 | 是 |
 | `.claude/skills/air-*/` | 六個 skill（Claude Code） | 是 |
 | `.codex/hooks.json`、`.agents/skills/air-*/` | Codex 的五個 hook 與六個 skill | 是 |
-| `.air/project.toml` | 這個專案的設定：套件位置、測試指令、遷移階段 | 是 |
+| `.air/project.toml` | 這個專案的設定：套件位置、測試指令（`[tests]`）、遷移階段、不歸 AIR 管的路徑（`migration.exclude`） | 是 |
 | `.air/history.jsonl` | 每次階段轉移、暫停與繼續的紀錄（時間、commit、方式、原因） | 是 |
 | `.air/paused.json` | 遷移暫停中的紀錄（時間、階段、原因）；`resume` 時移除 | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
@@ -84,7 +84,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 ## 更新與移除
 
-- **更新**：用新版的 `AIR/` 整包取代舊的，再執行 `sh AIR/install.sh`。`.air/project.toml` 和遷移報告都會保留；2.2 以前放在各層目錄的 `CLAUDE.md` 會被移除；2.6.1 以前 Claude Code 讀檔前的 hook 會被移除、改成產生 `.claude/rules/air-<層>.md`。Codex 的 hook 設定變動後要重新信任。
+- **更新**：用新版的 `AIR/` 整包取代舊的，再執行 `sh AIR/install.sh`。`.air/project.toml` 和遷移報告都會保留；2.2 以前放在各層目錄的 `CLAUDE.md` 會被移除；2.6.1 以前 Claude Code 讀檔前的 hook 會被移除、改成產生 `.claude/rules/air-<層>.md`；2.7 起測試指令改放 `[tests]`，舊的 `project.test-command` 仍可用（`doctor` 會提醒搬過去）。Codex 的 hook 設定變動後要重新信任。
 - **移除**：`sh AIR/uninstall.sh`。會移除所有標記區塊、hook、skill 與 `.claude/rules/air-*.md`；`.air/` 與遷移報告會保留，加上 `--purge` 才會刪除。已經搬進各層的程式碼不會被動到。
 
 ## 常用指令

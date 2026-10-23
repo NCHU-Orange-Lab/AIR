@@ -61,6 +61,13 @@ def _config(root: Path) -> tuple[Item, Config | None]:
     return Item(OK, "設定", f".air/project.toml（套件 {cfg.package}，階段 {cfg.phase}）"), cfg
 
 
+def _old_keys(cfg: Config | None) -> list[Item]:
+    if cfg is None or not cfg.old_test_keys:
+        return []
+    return [Item(WARN, "設定", f".air/project.toml 還在用 project.{'、project.'.join(cfg.old_test_keys)}（2.7 起改放 [tests] 的 command、timeout；"
+                              "舊鍵仍可用，兩邊都有時以 [tests] 為準）。搬過去後這個提醒就會消失")]
+
+
 def _integrity(kit: Path) -> Item:
     problems = integrity.manifest_problems(kit)
     if problems:
@@ -236,7 +243,7 @@ def _commit_check(root: Path) -> Item:
 def diagnose(root: Path) -> list[Item]:
     """診斷 root 這個專案（它的 AIR/ 是 root/AIR；在裝好的專案裡執行時就是 KIT_DIR）。"""
     config_item, cfg = _config(root)
-    items = [_python(root), config_item, _integrity(root / "AIR"), *_instructions(root)]
+    items = [_python(root), config_item, *_old_keys(cfg), _integrity(root / "AIR"), *_instructions(root)]
     installed = install.installed_hosts(root) or []
     for host in hosts.HOSTS.values():
         items += _host(root, host, host in installed, cfg)

@@ -15,7 +15,7 @@ description: 在 steps 層新增或修改資料處理步驟，或把步驟串進
 2. 參考 `templates/step.py` 寫函式。
 3. 在測試目錄寫測試：直接給輸入、比對輸出，不用 mock。
 4. 串進對應的 flow。需要新資料時，改設定檔與 storage，不要在 step 裡讀檔。
-5. 執行專案的測試指令（`.air/project.toml` 的 test-command），再執行 `python3 AIR/air.py check`。
+5. 執行專案的測試指令（`.air/project.toml` 的 `[tests]` command），再執行 `python3 AIR/air.py check`。
 
 ## 要不要獨立成一個函式
 

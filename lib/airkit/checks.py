@@ -316,7 +316,7 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
     if paths is None:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
         if cfg.package_dir.is_dir():
-            report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None]
+            report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None and not cfg.is_excluded(f)]
         for path, detail in integrity.problems(cfg.root):  # 套件與接點被動過，最晚在這裡（結束前、commit 前）抓到
             report.hard.append(Violation(path, 1, 1, "AIR009", f"AIR 套件或接點被修改：{detail}。{integrity.FIX}"))
     else:
