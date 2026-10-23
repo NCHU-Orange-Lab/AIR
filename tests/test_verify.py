@@ -258,10 +258,11 @@ class TestRecordsPerBranch(ProjectTestCase):
         self.git("checkout", "-q", "--detach")
         self.assertEqual(verify.branch_name(self.p.root), f"detached-{head[:12]}")
         self.assertEqual(verify.branch_slug("feat/x y:z"), "feat_x_y_z")
-        import shutil
-        shutil.rmtree(self.p.root / ".git")
-        self.assertEqual(verify.branch_name(self.p.root), "no-git")
-        self.assertEqual(verify.records_dir(self.p.root), self.p.root / ".air" / "branches" / "no-git")
+        from tests.helpers import Project
+        plain = Project()  # 沒有 git 的專案（Windows 上刪 .git 會碰到唯讀的物件檔，所以另開一個）
+        self.addCleanup(plain.cleanup)
+        self.assertEqual(verify.branch_name(plain.root), "no-git")
+        self.assertEqual(verify.records_dir(plain.root), plain.root / ".air" / "branches" / "no-git")
 
 
 if __name__ == "__main__":
