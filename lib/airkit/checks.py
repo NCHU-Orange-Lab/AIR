@@ -5,6 +5,7 @@
   AIR003 層內循環 import  AIR004 禁用的方法名稱    AIR005 缺少必要參數
   AIR006 禁用的函式      AIR007 跨層方向錯誤      AIR008 import 尚未遷移的舊模組
   AIR009 AIR 套件或接點被修改（只在全專案檢查時，見 integrity.py）
+  AIR010 層目錄遮蔽了同名模組（<層>/ 與 <層>.py 並存；只在全專案檢查時）
 軟規則（只提醒）：
   AIR101 函式語句過多    AIR102 函式過於複雜
 """
@@ -315,6 +316,26 @@ def integrity_violations(root: Path) -> list[Violation]:
     return [Violation(path, 1, 1, "AIR009", f"AIR 套件或接點被修改：{detail}。{integrity.FIX}") for path, detail in integrity.problems(root)]
 
 
+def layer_shadows(cfg: Config) -> list[tuple[Layer, Path]]:
+    """層目錄和同名模組並存：<package-dir>/<層>/ 與 <package-dir>/<層>.py。Python 載入目錄、忽略同名的 .py。"""
+    return [(la, cfg.package_dir / f"{la.name}.py") for la in cfg.layers.values()
+            if la.path.is_dir() and (cfg.package_dir / f"{la.name}.py").is_file()]
+
+
+def shadow_violations(cfg: Config) -> list[Violation]:
+    """AIR010。試跑（cookiecutter）：建立 main/ 之後 cookiecutter.main 指到空的 __init__.py，原本的 main.py 讀不到，3 個測試檔收集失敗。"""
+    return [Violation(mod, 1, 1, "AIR010",
+                      f"{la.rule}：層目錄 {la.name}/ 遮蔽了同名模組 {la.name}.py：Python 會載入目錄，{la.name}.py 裡的程式 import 不到。"
+                      f"這個模組就是這一層的話，{la.name}/ 只有空的 __init__.py 時執行 python3 AIR/air.py layers --adopt-module {la.name}"
+                      f"（git mv 成 {la.name}/__init__.py，並列出要加的 allow-legacy）；否則把 {la.name}.py 改名。")
+            for la, mod in layer_shadows(cfg)]
+
+
+def structure_violations(cfg: Config) -> list[Violation]:
+    """不屬於單一檔案、每個 session 都該知道的問題：套件與接點被動過（AIR009）、層目錄遮蔽模組（AIR010）。"""
+    return integrity_violations(cfg.root) + shadow_violations(cfg)
+
+
 def check(cfg: Config, paths: list[Path] | None = None) -> Report:
     """paths 為 None 時檢查所有層；否則只檢查給定檔案中位於層內的 .py。沒檢查的檔案與原因記在 report.skipped。"""
     report, touched = Report(), {}
@@ -322,7 +343,7 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
         if cfg.package_dir.is_dir():
             report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None and not cfg.is_excluded(f)]
-        report.hard += integrity_violations(cfg.root)  # 最晚在這裡（結束前、commit 前）抓到
+        report.hard += structure_violations(cfg)  # 最晚在這裡（結束前、commit 前）抓到
     else:
         targets = []
         for p in paths:

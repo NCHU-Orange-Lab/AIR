@@ -27,9 +27,92 @@ class TransitionError(ValueError):
     """階段轉移被拒絕（順序不對、前置條件沒滿足、缺少原因）。"""
 
 
-def create_layers(cfg: Config, names: list[str] | None = None) -> list[str]:
+class LayerCollision(ValueError):
+    """建立分層會遮蔽專案原有的同名模組，或 --adopt-module 的條件不成立。"""
+
+
+def _module_file(cfg: Config, name: str) -> Path:
+    return cfg.package_dir / f"{name}.py"
+
+
+def adoptable(cfg: Config, name: str) -> bool:
+    """<層>.py 可以搬成 <層>/__init__.py：模組存在，而且層目錄還沒有、或只有空的 __init__.py。"""
+    layer = cfg.layers[name].path
+    if not _module_file(cfg, name).is_file():
+        return False
+    if not layer.exists():
+        return True
+    entries = [p for p in layer.iterdir() if p.name != "__pycache__"]
+    return all(p.name == "__init__.py" and p.stat().st_size == 0 for p in entries)
+
+
+def plan_layers(cfg: Config, names: list[str], adopt: list[str]) -> None:
+    """建立之前先檢查，有問題就一個都不建：層目錄會遮蔽同名模組（試跑中 main/ 讓 cookiecutter.main 變成空的），--adopt-module 的條件。"""
+    unknown = [a for a in adopt if a not in cfg.layers]
+    if unknown:
+        raise LayerCollision(f"--adopt-module 只能指定層的名稱（{'、'.join(cfg.layers)}），不是：{'、'.join(unknown)}")
+    outside = [a for a in adopt if a not in names]
+    if outside:
+        raise LayerCollision(f"--adopt-module {'、'.join(outside)} 不在要建立的層裡。")
+    for a in adopt:
+        if not _module_file(cfg, a).is_file():
+            raise LayerCollision(f"沒有同名模組 {_module_file(cfg, a).relative_to(cfg.root).as_posix()}，不需要 --adopt-module {a}。")
+        if not adoptable(cfg, a):
+            raise LayerCollision(f"{a}/ 已經有內容，不能自動採用 {a}.py：手動處理（把 {a}.py 的內容併進 {a}/__init__.py，或把 {a}.py 改名）。")
+    blocked = [n for n in names if _module_file(cfg, n).is_file() and n not in adopt]
+    if blocked:
+        files = "、".join(_module_file(cfg, n).relative_to(cfg.root).as_posix() for n in blocked)
+        flags = " ".join(f"--adopt-module {n}" for n in blocked)
+        raise LayerCollision(
+            f"建立 {'、'.join(f'{n}/' for n in blocked)} 會遮蔽專案原有的同名模組 {files}：Python 會載入目錄、忽略 .py，原本的程式 import 不到。沒有建立任何東西。\n"
+            f"  這個模組就是這一層（例如 main.py 本來就是進入點）：python3 AIR/air.py layers {flags}，"
+            "它把 .py 用 git mv 搬成 <層>/__init__.py（import 路徑不變），並列出它 import 的舊模組要加進 migration.allow-legacy 的項目。\n"
+            "  不是的話，先把模組改名（並改掉 import 它的地方），再重跑 layers。")
+
+
+def _adopt_module(cfg: Config, name: str) -> None:
+    layer = cfg.layers[name].path
+    mod, init = _module_file(cfg, name), layer / "__init__.py"
+    layer.mkdir(parents=True, exist_ok=True)
+    if init.exists():
+        init.unlink()  # adoptable() 已確認它是空的
+    if verify.git(cfg.root, "mv", "-f", rel(mod, cfg.root), rel(init, cfg.root)) is None:  # 不是 git repo、或檔案還沒追蹤
+        mod.rename(init)
+
+
+def _legacy_module(target: str, cfg: Config) -> str:
+    """cookiecutter.config.get_user_config → cookiecutter.config（往回找到真的是模組檔案的那一段）。"""
+    rest = target[len(cfg.package) + 1:].split(".")
+    for i in range(len(rest), 0, -1):
+        base = cfg.package_dir.joinpath(*rest[:i])
+        if base.with_suffix(".py").is_file() or (base / "__init__.py").is_file():
+            return f"{cfg.package}.{'.'.join(rest[:i])}"
+    return target
+
+
+def adopt_report(cfg: Config, name: str) -> list[str]:
+    """採用 <層>.py 之後給使用者看的：它 import 的舊模組，要經同意加進 migration.allow-legacy（每筆要寫原因）。"""
+    init = cfg.layers[name].path / "__init__.py"
+    source = read_source(init)
+    if isinstance(source, Violation):
+        return [f"  注意：{rel(init, cfg.root)} 讀不出來，無法列出它 import 的舊模組。"]
+    module, is_package = module_of(init, cfg)
+    package = module if is_package else module.rpartition(".")[0]
+    legacy = sorted({_legacy_module(t, cfg) for _, t in import_targets(ast.parse(source), package) if classify(t, cfg)[0] == "legacy"})
+    if not legacy:
+        return [f"  {name} 層沒有 import 任何尚未遷移的舊模組，不需要 allow-legacy。"]
+    lines = [f"  {name} 層 import 了 {len(legacy)} 個尚未遷移的舊模組。經使用者同意後，加進 .air/project.toml 的 migration.allow-legacy（原因欄要改成真正的原因）："]
+    lines += [f'    {{ from = "{name}", module = "{m}", reason = "{name}.py 原本就是這一層，搬成 {name}/__init__.py；<待填：為什麼暫時還要用它>" }},' for m in legacy]
+    return lines
+
+
+def create_layers(cfg: Config, names: list[str] | None = None, adopt: list[str] | None = None) -> list[str]:
+    names, adopt = list(names or cfg.layers), list(adopt or [])
+    plan_layers(cfg, names, adopt)
+    for a in adopt:
+        _adopt_module(cfg, a)
     created = []
-    for name in names or list(cfg.layers):
+    for name in names:
         layer = cfg.layers[name]
         layer.path.mkdir(parents=True, exist_ok=True)
         init = layer.path / "__init__.py"
@@ -78,6 +161,9 @@ def preconditions(cfg: Config, phase: str) -> list[str]:
         report = check(cfg)
         if report.hard:
             missing.append(f"架構檢查有 {len(report.hard)} 個違規（執行 python3 AIR/air.py check）")
+        receipt = verify.load_receipt(cfg.root)  # 建立分層可能弄壞專案（層目錄遮蔽同名模組），check 看不到，要跑測試才知道
+        if receipt is None or not receipt["accepted"] or verify.receipt_state(cfg, receipt) != "fresh":
+            missing.append("建立分層之後還沒有通過的驗收：執行 python3 AIR/air.py verify（紀錄要與目前的程式碼、設定一致）")
     if phase == "done":
         receipt = verify.load_receipt(cfg.root)
         if receipt is None:
