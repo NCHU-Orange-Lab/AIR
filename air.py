@@ -21,7 +21,8 @@
   python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查，
                                              以及常駐內容到 80% 以上的警告
   python3 AIR/air.py doctor --context [--json] 常駐內容的完整盤點：各宿主一開場載入的檔案、大小、上限與佔比、AIR 區塊的位置
-  python3 AIR/air.py layers [層 ...]         建立分層目錄（預設全部）
+  python3 AIR/air.py layers [層 ...] [--adopt-module 層]
+                                             建立分層目錄（預設全部）；專案已有同名的 <層>.py 會拒絕，--adopt-module 把它搬成 <層>/__init__.py
   python3 AIR/air.py survey [--out 檔案]     盤點現有程式碼（Markdown；--out 寫進檔案，畫面只印摘要）
   python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
   python3 AIR/air.py phase <階段> [--rollback|--force] [--reason 原因]
@@ -54,8 +55,8 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import batch, budget, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
-from airkit.checks import EXIT, check, format_grouped, grouped, integrity_violations, rel  # noqa: E402
+from airkit import batch, budget, buildcheck, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
+from airkit.checks import EXIT, check, format_grouped, grouped, rel, structure_violations  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
 FIX_HINT = "依訊息中的規則編號讀對應層的規則（AIR/rules/<層>.md；前綴對照見 AIR/AGENTS.md）後修正。"
@@ -199,8 +200,23 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_layers(args) -> int:
-    for f in project.create_layers(load(), args.names or None):
+    cfg = load()
+    try:
+        created = project.create_layers(cfg, args.names or None, args.adopt_module)
+    except project.LayerCollision as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
+    for name in args.adopt_module:
+        print(f"  搬移 {cfg.package_dir.name}/{name}.py → {cfg.package_dir.name}/{name}/__init__.py（import 路徑不變）")
+    for f in created:
         print(f"  建立 {f}")
+    for name in args.adopt_module:
+        for line in project.adopt_report(cfg, name):
+            print(line)
+    for p in buildcheck.problems(cfg):
+        print(f"  打包：{p.hint()}")
+    for note in buildcheck.notes(cfg):
+        print(f"  打包：{note}")
     return 0
 
 
@@ -353,7 +369,7 @@ def hook_stop(event: hosts.Event, cfg: Config) -> int:
     else:
         edited, changed, has_snapshot = context.stop_targets(cfg, event.session_id)
         report = check(cfg, sorted({*edited, *changed}))
-        report.hard += integrity_violations(cfg.root)
+        report.hard += structure_violations(cfg)
         scope_note = (f"這個 session 動過的 {len(edited)} 個檔案＋開始後內容變了的 {len(changed)} 個層內檔案"
                       + ("" if has_snapshot else "；沒有 session 開始時的快照，只看編輯工具記下的"))
     if not report.hard:
@@ -421,6 +437,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("layers")
     p.add_argument("names", nargs="*")
+    p.add_argument("--adopt-module", action="append", default=[], metavar="層",
+                   help="專案已經有同名的 <層>.py 時，把它 git mv 成 <層>/__init__.py 當作這一層（目錄只能有空的 __init__.py）；可重複")
     p = sub.add_parser("survey")
     p.add_argument("--out", help="把完整的盤點表寫進這個檔案（相對專案根目錄），畫面只印摘要")
     p = sub.add_parser("status")

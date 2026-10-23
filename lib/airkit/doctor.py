@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import budget, hooklog, hosts, install, integrity
+from . import budget, buildcheck, hooklog, hosts, install, integrity
 from .config import Config, ConfigError, load
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -245,6 +245,14 @@ def _commit_check(root: Path) -> Item:
     return Item(OK, "commit 前檢查", status)
 
 
+def _packaging(cfg: Config | None) -> list[Item]:
+    """setuptools 的明確 packages 清單缺各層的子套件：層裡已經有實際程式是問題（wheel 現在就是壞的），只有空殼是注意。"""
+    if cfg is None:
+        return []
+    items = [Item(FAIL if p.has_code else WARN, "打包", p.hint()) for p in buildcheck.problems(cfg)]
+    return items + [Item(WARN, "打包", n) for n in buildcheck.notes(cfg)]
+
+
 def _context(root: Path, cfg: Config | None) -> list[Item]:
     """常駐內容：只把到 80% 以上的列進來（完整表用 doctor --context）。"""
     out = []
@@ -270,6 +278,7 @@ def diagnose(root: Path) -> list[Item]:
     items += _stale_rules(root, cfg)
     items.append(_commit_check(root))
     items += _hook_errors(root)
+    items += _packaging(cfg)
     items += _context(root, cfg)
     return items
 

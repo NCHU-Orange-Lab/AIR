@@ -1,9 +1,10 @@
 """專案操作：建立分層、盤點、狀態、受控的遷移階段轉移，以及 check 指令的結論與結束碼。"""
 
 import json
+import subprocess
 import unittest
 
-from tests.helpers import TESTS_PASS, ProjectTestCase
+from tests.helpers import TESTS_FAIL, TESTS_PASS, ProjectTestCase
 from airkit import project
 
 REPORT = "docs/AIR-遷移報告.md"
@@ -17,6 +18,141 @@ class TestLayers(ProjectTestCase):
         for name in ("contracts", "steps", "flows", "adapters", "storage", "main"):
             self.assertTrue((self.p.root / "demo" / name / "__init__.py").exists())
         self.assertEqual(self.p.check_all(), [])  # 剛建立的層與樣板都要合規
+
+
+class TestTransitionFailingTests(ProjectTestCase):
+    test_command = TESTS_FAIL
+
+    def test_layered_is_refused_while_verify_fails(self):
+        project.set_phase(self.p.cfg(), "planned")
+        self.p.air("layers")
+        self.assertEqual(self.p.air("verify").returncode, 1)
+        r = self.p.air("phase", "layered")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("還沒有通過的驗收", r.stderr)
+        self.assertEqual(self.p.cfg().phase, "planned")
+
+
+class TestLayersCollision(ProjectTestCase):
+    """試跑（cookiecutter）：專案原本就有 cookiecutter/main.py，layers 建了 main/ 之後 cookiecutter.main 指到空的 __init__.py。
+    layers 現在拒絕；專案的模組就是這一層時用 --adopt-module 搬成 <層>/__init__.py。"""
+    phase = "planned"
+    git = True
+    MAIN = "import os\nfrom demo.config import get_user_config\nfrom demo.config import other\nfrom demo.replay import dump\n\n\ndef cookiecutter():\n    return os.getcwd()\n"
+
+    def setUp(self):
+        super().setUp()
+        self.p.write("demo/main.py", self.MAIN)
+        self.p.write("demo/config.py", "def get_user_config():\n    return {}\n\n\ndef other():\n    return 1\n")
+        self.p.write("demo/replay.py", "def dump():\n    return 1\n")
+        self.p.commit("base")
+
+    def test_collision_is_refused_and_nothing_is_created(self):
+        r = self.p.air("layers")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("遮蔽專案原有的同名模組 demo/main.py", r.stderr)
+        self.assertIn("python3 AIR/air.py layers --adopt-module main", r.stderr)
+        self.assertIn("沒有建立任何東西", r.stderr)
+        self.assertEqual(sorted(x.name for x in (self.p.root / "demo").iterdir() if x.name != "__pycache__"),
+                         ["__init__.py", "config.py", "main.py", "replay.py"])  # 一個層目錄都沒建：全有或全無
+        self.assertEqual(self.p.air("layers", "steps", "flows").returncode, 0)  # 不碰 main 的話可以建
+        self.assertFalse((self.p.root / "demo" / "main").exists())
+
+    def test_two_collisions_are_listed_together(self):
+        self.p.write("demo/steps.py", "x = 1\n")
+        r = self.p.air("layers")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("steps/、main/", r.stderr)  # 依層的順序
+        self.assertIn("--adopt-module steps --adopt-module main", r.stderr)
+
+    def test_adopt_moves_the_module_with_git_and_lists_allow_legacy(self):
+        r = self.p.air("layers", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("搬移 demo/main.py → demo/main/__init__.py（import 路徑不變）", r.stdout)
+        self.assertFalse((self.p.root / "demo" / "main.py").exists())
+        self.assertEqual((self.p.root / "demo" / "main" / "__init__.py").read_text(encoding="utf-8"), self.MAIN)
+        for mod in ("demo.config", "demo.replay"):
+            self.assertIn(f'{{ from = "main", module = "{mod}", reason = "main.py 原本就是這一層', r.stdout)
+        self.assertEqual(r.stdout.count('module = "demo.config"'), 1)  # 同一個模組只列一次
+        self.assertNotIn('module = "os"', r.stdout)
+        staged = subprocess.run(["git", "status", "--porcelain"], cwd=self.p.root, capture_output=True, text=True, encoding="utf-8").stdout
+        self.assertIn("R  demo/main.py -> demo/main/__init__.py", staged)  # git 看得出是搬移
+        self.assertTrue((self.p.root / "demo" / "steps" / "__init__.py").exists())  # 其他層照建
+        self.assertIn("AIR008", self.p.air("check").stdout)  # allow-legacy 還沒加：check 要它加
+
+    def test_adopt_works_when_main_dir_has_only_the_empty_init_from_an_earlier_layers_run(self):
+        # 試跑的實際順序：先跑了 layers（建出空的 main/__init__.py）才發現撞名
+        (self.p.root / "demo" / "main").mkdir()
+        (self.p.root / "demo" / "main" / "__init__.py").write_text("", encoding="utf-8")
+        self.assertIn("AIR010", self.p.air("check").stdout)  # 這個狀態 check 就會報，layers --adopt-module 是它的修法
+        r = self.p.air("layers", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.p.root / "demo" / "main" / "__init__.py").read_text(encoding="utf-8"), self.MAIN)
+
+    def test_adopt_without_git_falls_back_to_rename(self):
+        import shutil
+        shutil.rmtree(self.p.root / ".git")
+        r = self.p.air("layers", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.p.root / "demo" / "main" / "__init__.py").exists())
+        self.assertFalse((self.p.root / "demo" / "main.py").exists())
+
+    def test_adopt_without_git_replaces_an_existing_empty_init(self):
+        # Windows 的 Path.rename 遇到既有檔案會失敗，所以採用之前要先刪掉空的 __init__.py（POSIX 上 rename 會直接覆蓋，看不出差別）
+        import shutil
+        shutil.rmtree(self.p.root / ".git")
+        (self.p.root / "demo" / "main").mkdir()
+        (self.p.root / "demo" / "main" / "__init__.py").write_text("", encoding="utf-8")
+        r = self.p.air("layers", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.p.root / "demo" / "main" / "__init__.py").read_text(encoding="utf-8"), self.MAIN)
+
+    def test_adopt_conditions(self):
+        r = self.p.air("layers", "--adopt-module", "steps")  # 沒有 steps.py
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("沒有同名模組 demo/steps.py，不需要 --adopt-module steps", r.stderr)
+        r = self.p.air("layers", "--adopt-module", "nope")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("只能指定層的名稱", r.stderr)
+        r = self.p.air("layers", "flows", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("main 不在要建立的層裡", r.stderr)
+        self.p.write("demo/main/helper.py", "x = 1\n")  # main/ 已經有內容：不能自動併
+        r = self.p.air("layers", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("main/ 已經有內容", r.stderr)
+        self.assertTrue((self.p.root / "demo" / "main.py").exists())  # 失敗什麼都沒動
+
+    def test_adopt_of_a_module_without_legacy_imports_says_so(self):
+        self.p.write("demo/main.py", "import os\n\n\ndef run():\n    return os.getcwd()\n")
+        r = self.p.air("layers", "--adopt-module", "main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("沒有 import 任何尚未遷移的舊模組，不需要 allow-legacy", r.stdout)
+
+    def test_air010_when_both_exist_and_the_hook_stop_reports_it_without_a_snapshot(self):
+        (self.p.root / "demo" / "main").mkdir()
+        (self.p.root / "demo" / "main" / "__init__.py").write_text("", encoding="utf-8")
+        r = self.p.air("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("AIR010", r.stdout)
+        self.assertIn("層目錄 main/ 遮蔽了同名模組 main.py", r.stdout)
+        self.assertIn("--adopt-module main", r.stdout)
+        self.assertIn("MAIN-1", r.stdout)
+        self.assertIn("demo/main.py", r.stdout)
+        stop = self.p.air("hook", "stop", stdin='{"session_id": "x"}')
+        self.assertEqual(stop.returncode, 2)  # Stop 的 session 範圍也不放過（跟 AIR009 一樣不分 session）
+        self.assertIn("AIR010", stop.stderr)
+        single = self.p.air("check", "demo/main/__init__.py")
+        self.assertNotIn("AIR010", single.stdout)  # 編輯後的單檔檢查不報（它不是這個檔案的問題）
+        self.p.air("layers", "--adopt-module", "main")
+        self.assertNotIn("AIR010", self.p.air("check").stdout)
+
+    def test_dir_only_or_module_only_is_not_a_shadow(self):
+        from airkit import checks
+        self.assertEqual(checks.layer_shadows(self.p.cfg()), [])  # 只有 main.py
+        (self.p.root / "demo" / "main.py").unlink()
+        (self.p.root / "demo" / "main").mkdir()
+        self.assertEqual(checks.layer_shadows(self.p.cfg()), [])  # 只有 main/
 
 
 class TestSetPhase(ProjectTestCase):
@@ -96,7 +232,25 @@ class TestTransition(ProjectTestCase):
         self.assertIn("違規", r.stderr)
         bad.unlink()
         r = self.p.air("phase", "layered")
+        self.assertEqual(r.returncode, 1)  # check 過了，但還沒有驗收
+        self.assertIn("還沒有通過的驗收", r.stderr)
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        r = self.p.air("phase", "layered")
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_layered_needs_a_fresh_accepted_verify_not_just_a_clean_check(self):
+        # 試跑（cookiecutter）：建立 main/ 讓 3 個測試檔收集失敗，但 check 看不到，只有跑測試才知道
+        project.set_phase(self.p.cfg(), "planned")
+        self.p.air("layers")
+        r = self.p.air("phase", "layered")
+        self.assertEqual((r.returncode, "沒有通過的驗收" in r.stderr or "還沒有通過的驗收" in r.stderr), (1, True))
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.p.write("demo/steps/a.py", "x = 1\n")  # 驗收之後程式又變了：紀錄過期
+        r = self.p.air("phase", "layered")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("還沒有通過的驗收", r.stderr)
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.assertEqual(self.p.air("phase", "layered").returncode, 0)
 
     def test_rollback_requires_reason_and_only_goes_backward(self):
         project.set_phase(self.p.cfg(), "planned")
@@ -245,6 +399,7 @@ class TestFullFlow(ProjectTestCase):
         for phase in ("analyzed", "planned"):
             self.assertEqual(self.p.air("phase", phase).returncode, 0, phase)
         self.assertEqual(self.p.air("layers").returncode, 0)
+        self.assertEqual(self.p.air("verify").returncode, 0)  # layered 要有新鮮且通過的驗收
         for phase in ("layered", "migrating"):
             self.assertEqual(self.p.air("phase", phase).returncode, 0, phase)
         self.p.write("demo/steps/clean.py", "def clean(x):\n    return x\n")

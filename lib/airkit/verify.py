@@ -19,7 +19,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from . import golden, junit, runner, usage
+from . import buildcheck, golden, junit, runner, usage
 from .checks import Report, check, rel
 from .config import KIT_DIR, PROJECT_FILE, Config, Suite
 
@@ -213,6 +213,19 @@ def architecture(report: Report, root: Path, scope: str) -> dict:
     return {**result, "status": "pass"}
 
 
+def packaging(cfg: Config, scope: str) -> dict | None:
+    """setuptools 的明確 packages 清單有沒有列到各層的子套件（沒有明確清單的專案不出現這一項）。批次只顯示，final 必須通過。"""
+    declared = buildcheck.declared(cfg.root)
+    if not any(d.packages is not None for d in declared) and not buildcheck.notes(cfg):
+        return None
+    result = {"name": "packaging", "required": scope == "final"}
+    probs = buildcheck.problems(cfg)
+    if probs:
+        return {**result, "status": "fail", "detail": "；".join(p.hint() for p in probs), "items": [m for p in probs for m in p.missing]}
+    notes = buildcheck.notes(cfg)
+    return {**result, "status": "pass", "detail": "各層的子套件都在 packages 清單裡" + ("；" + "；".join(notes) if notes else "")}
+
+
 def allowances(cfg: Config) -> dict:
     items = [f"{a.layer} → {a.module}（{a.reason or '沒寫原因'}）" for a in cfg.allow_legacy]
     detail = f"還有 {len(items)} 筆暫時允許的舊模組 import，收尾時必須清空：" + "；".join(items) if items else "已清空"
@@ -234,6 +247,8 @@ def verify(cfg: Config, scope: str = "batch") -> dict:
     before = fingerprint(cfg)
     report = check(cfg)
     checks = [architecture(report, cfg.root, scope), run_tests(cfg, scope), *golden.checks(cfg, scope)]
+    if (pack := packaging(cfg, scope)) is not None:
+        checks.append(pack)
     if scope == "final":
         checks += [allowances(cfg), legacy_remaining(report, cfg.root)]
     reasons = [f"{c['name']}：{c['detail']}" for c in checks if c["required"] and c["status"] != "pass"]
