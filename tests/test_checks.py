@@ -64,6 +64,26 @@ class TestExternalImports(ProjectTestCase):
     def test_submodule_of_allowed_is_allowed(self):
         self.assertEqual(self.p.codes("from collections.abc import Iterator\n"), [])
 
+    def test_side_effect_free_stdlib_is_allowed(self):
+        # v3.0.5：公開介面完全沒有副作用的標準庫（pelican 試跑：html.parser、urllib.parse 等被擋，只能逐一請使用者加進 imports.extra）
+        src = ("import html\nfrom html.parser import HTMLParser\nfrom urllib.parse import quote, urljoin\nimport urllib.parse\n"
+               "import textwrap\nimport unicodedata\nimport fnmatch\nimport hashlib\nimport base64\nimport binascii\n"
+               "import heapq\nimport bisect\nimport difflib\nimport types\nimport contextlib\nimport numbers\n")
+        self.assertEqual(self.p.codes(src), [])
+
+    def test_the_whitelist_is_a_prefix_match_so_the_parent_modules_stay_blocked(self):
+        # urllib.parse 在白名單裡不代表 urllib 在：import urllib 與 urllib.request（網路）仍然被擋
+        self.assertEqual(self.p.codes("import urllib\n"), ["AIR002"])
+        self.assertEqual(self.p.codes("import urllib.request\n"), ["AIR002"])
+        self.assertEqual(self.p.codes("from urllib.request import urlopen\n"), ["AIR002"])
+        self.assertEqual(self.p.codes("from urllib import request\n"), ["AIR002"])
+        self.assertEqual(self.p.codes("import html5lib\n"), ["AIR002"])        # 前綴要在點的邊界
+
+    def test_side_effecting_stdlib_stays_blocked(self):
+        for mod in ("os", "pathlib", "posixpath", "logging", "subprocess", "locale", "tempfile", "uuid", "secrets", "warnings", "zoneinfo"):
+            with self.subTest(mod=mod):
+                self.assertEqual(self.p.codes(f"import {mod}\n"), ["AIR002"])
+
     def test_impure_layer_may_import_anything(self):
         self.assertEqual(self.p.codes("import requests\nimport os\n", layer="storage"), [])
 

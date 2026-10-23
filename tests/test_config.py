@@ -81,6 +81,32 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(self.build({}).stop_scope, "session")
 
 
+class TestTestsDir(unittest.TestCase):
+    def setUp(self):
+        self.kit = config.read_kit()
+        self.root = Path("/tmp/air-config-test")
+
+    def build(self, project: dict) -> config.Config:
+        return config.build(self.kit, {"project": {"package": "demo"}, **project}, self.root)
+
+    def test_is_test_file_only_inside_tests_dir(self):
+        c = self.build({"project": {"package": "demo", "package-dir": "demo", "tests-dir": "demo/tests"}})
+        self.assertTrue(c.is_test_file(self.root / "demo" / "tests" / "test_a.py"))
+        self.assertTrue(c.is_test_file(self.root / "demo" / "tests" / "sub" / "conftest.py"))
+        self.assertFalse(c.is_test_file(self.root / "demo" / "testsuite.py"))     # 名字像但不在目錄底下
+        self.assertFalse(c.is_test_file(self.root / "demo" / "core.py"))
+        self.assertFalse(self.build({}).is_test_file(self.root / "demo" / "tests" / "test_a.py"))  # 預設的 tests-dir 是根目錄的 tests
+
+    def test_tests_dir_cannot_equal_or_contain_package_dir(self):
+        for tests_dir in ("demo", ".", "src"):
+            with self.subTest(tests_dir=tests_dir):
+                with self.assertRaises(config.ConfigError) as ctx:
+                    self.build({"project": {"package": "demo", "package-dir": "src/demo" if tests_dir == "src" else "demo", "tests-dir": tests_dir}})
+                self.assertIn("不能等於或包住 package-dir", str(ctx.exception))
+        self.build({"project": {"package": "demo", "package-dir": "demo", "tests-dir": "demo/tests"}})   # 在套件裡面是可以的
+        self.build({"project": {"package": "demo", "package-dir": "src/demo", "tests-dir": "tests"}})
+
+
 class TestOldLayoutStillLoads(ProjectTestCase):
     def test_old_project_toml_works_and_status_runs(self):
         self.p.write(".air/project.toml", OLD_LAYOUT)

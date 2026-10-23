@@ -33,6 +33,36 @@ class TestDoctor(ProjectTestCase):
         self.assertIn("[OK] commit 前檢查", r.stdout)
         self.assertTrue(any("信任" in w for w in self.levels()["warn"]))  # Codex 的 hook 要信任，AIR 無法確認
 
+    def set_project(self, old: str, new: str) -> None:
+        path = self.p.root / ".air" / "project.toml"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text)
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def dir_warnings(self) -> list[str]:
+        return [i.text for i in doctor.diagnose(self.p.root) if i.area == "測試目錄"]
+
+    def test_tests_dir_missing_while_tests_live_in_the_package_is_a_warning(self):
+        self.assertEqual(self.dir_warnings(), [])                      # 沒有測試、tests-dir 不存在：不吵
+        self.p.write("demo/tests/test_a.py", "")
+        (w,) = self.dir_warnings()
+        self.assertIn("tests-dir = 'tests' 不存在，但 demo/tests/ 有測試", w)
+        self.assertIn("改成 'demo/tests'", w)
+        self.set_project('tests-dir = "tests"', 'tests-dir = "demo/tests"')
+        self.assertEqual(self.dir_warnings(), [])
+
+    def test_exclude_covering_tests_dir_is_a_warning(self):
+        self.p.write("demo/tests/test_a.py", "")
+        self.set_project('tests-dir = "tests"', 'tests-dir = "demo/tests"')
+        self.set_project("exclude = [", 'exclude = ["demo/tests", ')
+        (w,) = self.dir_warnings()
+        self.assertIn("migration.exclude 的 'demo/tests' 蓋住了 tests-dir（demo/tests）", w)
+        self.assertIn("不凍結、不進驗收指紋", w)
+        self.set_project('exclude = ["demo/tests", ', 'exclude = ["demo/experiments", ')   # 排除別的路徑：不提醒
+        self.assertEqual(self.dir_warnings(), [])
+        self.set_project('exclude = ["demo/experiments", ', 'exclude = ["demo/test", ')    # demo/test 不是 demo/tests 的上層，只是前綴相同
+        self.assertEqual(self.dir_warnings(), [])
+
     def test_json(self):
         data = json.loads(self.p.air("doctor", "--json").stdout)
         self.assertEqual((data["schema"], data["ok"], data["problems"]), ("air.doctor.v1", True, 0))

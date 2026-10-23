@@ -107,6 +107,11 @@ class Config:
             return self.final
         return Suite("batch", self.test_command, self.test_timeout, self.test_results)
 
+    def is_test_file(self, path: Path) -> bool:
+        """這個檔案在 tests-dir 底下。測試放在套件裡面（例如 pelican/tests）時，它們不是待遷移的舊模組：
+        不列進舊程式碼的清單、survey 與批次的剩餘數；但仍在驗收指紋與凍結的範圍內（那兩處本來就涵蓋 tests-dir）。"""
+        return path.resolve().is_relative_to(self.tests_dir.resolve())
+
     def is_excluded(self, path: Path) -> bool:
         """這個路徑在 migration.exclude 裡（或底下）。只給層外的檔案用：層內的檔案一律檢查。"""
         try:
@@ -187,6 +192,10 @@ def build(kit: dict, project: dict, root: Path) -> Config:
     if stop_scope not in STOP_SCOPES:
         raise ConfigError(f".air/project.toml 的 hooks.stop-scope 只能是 {'、'.join(STOP_SCOPES)}，不是：{stop_scope!r}")
     package_dir = root / proj.get("package-dir", package)
+    tests_dir = root / proj.get("tests-dir", "tests")
+    if package_dir.resolve().is_relative_to(tests_dir.resolve()):
+        raise ConfigError(f".air/project.toml 的 tests-dir（{proj.get('tests-dir', 'tests')}）不能等於或包住 package-dir（{proj.get('package-dir', package)}）："
+                          "這樣整個套件都會被當成測試。測試放在套件裡面時，tests-dir 指向那個子目錄（例如 pelican/tests）。")
     layers = {
         name: Layer(
             name=name,
@@ -209,7 +218,7 @@ def build(kit: dict, project: dict, root: Path) -> Config:
         root=root,
         package=package,
         package_dir=package_dir,
-        tests_dir=root / proj.get("tests-dir", "tests"),
+        tests_dir=tests_dir,
         layers=layers,
         common_imports=tuple(kit["imports"]["common"]) + tuple(project.get("imports", {}).get("extra", [])),
         hints=kit.get("hints", {}),

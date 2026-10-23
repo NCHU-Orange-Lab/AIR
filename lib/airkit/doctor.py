@@ -253,6 +253,23 @@ def _packaging(cfg: Config | None) -> list[Item]:
     return items + [Item(WARN, "打包", n) for n in buildcheck.notes(cfg)]
 
 
+def _tests_dir(root: Path, cfg: Config | None) -> list[Item]:
+    """tests-dir 指到不存在的目錄而別處有測試：測試不會進凍結與驗收指紋，套件裡的測試還會被當成舊模組。
+    exclude 蓋住 tests-dir：被排除的路徑不凍結、不進驗收指紋，改了測試驗收紀錄也不會過期。"""
+    if cfg is None:
+        return []
+    items = []
+    shown = cfg.tests_dir.relative_to(root).as_posix() if cfg.tests_dir.is_relative_to(root) else str(cfg.tests_dir)
+    if not cfg.tests_dir.is_dir():
+        found = install.suggest_tests_dir(root, cfg.package_dir.relative_to(root).as_posix() if cfg.package_dir.is_relative_to(root) else "")
+        if found:
+            items.append(Item(WARN, "測試目錄", f"tests-dir = {shown!r} 不存在，但 {found}/ 有測試：把 .air/project.toml 的 tests-dir 改成 {found!r}（測試才會進凍結與驗收指紋）"))
+    covering = [e for e in cfg.exclude if shown == e or shown.startswith(e + "/")]
+    if covering:
+        items.append(Item(WARN, "測試目錄", f"migration.exclude 的 {covering[0]!r} 蓋住了 tests-dir（{shown}）：測試不凍結、不進驗收指紋，改了測試驗收紀錄也不會過期。測試目錄請用 tests-dir，不要放進 exclude"))
+    return items
+
+
 def _context(root: Path, cfg: Config | None) -> list[Item]:
     """常駐內容：只把到 80% 以上的列進來（完整表用 doctor --context）。"""
     out = []
@@ -279,6 +296,7 @@ def diagnose(root: Path) -> list[Item]:
     items.append(_commit_check(root))
     items += _hook_errors(root)
     items += _packaging(cfg)
+    items += _tests_dir(root, cfg)
     items += _context(root, cfg)
     return items
 

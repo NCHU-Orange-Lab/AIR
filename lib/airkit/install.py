@@ -125,13 +125,28 @@ def preflight(root: Path) -> list[str]:
 
 # ── 專案設定 ──
 
+def tests_dir_candidates(package_dir: str) -> list[str]:
+    base = package_dir.strip("/")
+    return ["tests", "test", *([f"{base}/tests", f"{base}/test"] if base else [])]
+
+
+def suggest_tests_dir(root: Path, package_dir: str) -> str | None:
+    """第一個真的放了 .py 的候選測試目錄（tests、test，然後是套件裡面的 tests、test）；都沒有是 None。"""
+    for cand in tests_dir_candidates(package_dir):
+        d = root / cand
+        if d.is_dir() and next(d.rglob("*.py"), None) is not None:
+            return cand
+    return None
+
+
 def write_project_file(root: Path, package: str, package_dir: str) -> str:
     path = root / PROJECT_FILE
     if path.exists():
         return "unchanged"
     template = (KIT_DIR / "templates" / "project.toml").read_text(encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(template.replace("{package}", package).replace("{package_dir}", package_dir), encoding="utf-8")
+    tests_dir = suggest_tests_dir(root, package_dir) or "tests"
+    path.write_text(template.replace("{package}", package).replace("{package_dir}", package_dir).replace("{tests_dir}", tests_dir), encoding="utf-8")
     return "created"
 
 

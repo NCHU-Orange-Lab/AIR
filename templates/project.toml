@@ -6,7 +6,7 @@
 [project]
 package = "{package}"           # 套件的 import 名稱
 package-dir = "{package_dir}"   # 套件目錄（相對專案根目錄）；各層是它底下的子套件
-tests-dir = "tests"             # 測試目錄（會放入 TEST 規則）
+tests-dir = "{tests_dir}"             # 測試目錄（會放入 TEST 規則）；測試放在套件裡面時指向那個子目錄，它們就不算舊模組
 
 [imports]
 # 純的層額外允許 import 的外部模組。新增前要經使用者同意。

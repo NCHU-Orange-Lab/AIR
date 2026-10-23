@@ -295,8 +295,20 @@ def _module_facts(file: Path, cfg: Config) -> dict:
 
 
 def survey_rows(cfg: Config) -> list[dict]:
-    files = sorted(f for f in cfg.package_dir.rglob("*.py") if not cfg.is_excluded(f)) if cfg.package_dir.is_dir() else []
+    files = sorted(f for f in cfg.package_dir.rglob("*.py") if not cfg.is_excluded(f) and not cfg.is_test_file(f)) if cfg.package_dir.is_dir() else []
     return [_module_facts(f, cfg) for f in files]
+
+
+def tests_in_package(cfg: Config) -> int:
+    """套件目錄裡屬於 tests-dir 的 .py 檔數（survey 不盤點它們，只說明有幾個）。"""
+    if not cfg.package_dir.is_dir():
+        return 0
+    return sum(1 for f in cfg.package_dir.rglob("*.py") if cfg.is_test_file(f) and not cfg.is_excluded(f))
+
+
+def _tests_note(cfg: Config) -> str | None:
+    n = tests_in_package(cfg)
+    return f"測試 {n} 個模組在 tests-dir（{cfg.tests_dir.relative_to(cfg.root).as_posix()}）：不盤點，也不算舊模組" if n else None
 
 
 def survey_summary(cfg: Config, rows: list[dict], out: Path | None) -> str:
@@ -314,6 +326,8 @@ def survey_summary(cfg: Config, rows: list[dict], out: Path | None) -> str:
         "- 第三方套件（用到的模組數）：" + ("、".join(f"{m}（{n}）" for m, n in top_third) or "無"),
         "- 訊號最多的模組（需要拆開的候選）：" + ("、".join(f"`{r['module']}`（{len(r['signals'])} 處）" for r in noisy) or "無"),
     ]
+    if note := _tests_note(cfg):
+        lines.insert(2, f"- {note}")
     if out is not None:
         lines.append(f"- 完整的盤點表已寫入 {rel(out, cfg.root)}（{len(rows)} 列）；分析時只查需要的列，不要整份讀進對話")
     return "\n".join(lines) + "\n"
@@ -327,6 +341,7 @@ def survey(cfg: Config, rows: list[dict] | None = None) -> str:
         "",
         f"- 套件目錄：`{cfg.package_dir.relative_to(cfg.root).as_posix()}`",
         f"- 模組數：{len(rows)}（已在層內：{sum(1 for r in rows if r['layer'])}）",
+        *([f"- {note}"] if (note := _tests_note(cfg)) else []),
         "",
         "訊號代碼：AIR001 內建 I/O（open、print…）、AIR004 讀寫方法、AIR005 缺少 seed、AIR006 禁用函式（讀檔、時間、亂數）",
         "",
