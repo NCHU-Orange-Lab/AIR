@@ -539,9 +539,9 @@ class TestCheckCommand(ProjectTestCase):
 
     def test_only_legacy_imports_are_merged_other_imports_keep_their_names(self):
         # AIR002 的訊息也帶 import 名稱，但修法會因名稱而不同（提示依套件而定），不能併成一組看不出是哪個
-        self.p.layer("steps", a="import requests\n", b="import yaml\n")
+        self.p.layer("steps", a="import jsonschema\n", b="import yaml\n")  # 兩個都沒有專屬提示，修法文字相同
         out = self.p.air("check").stdout
-        self.assertIn("import `requests`", out)
+        self.assertIn("import `jsonschema`", out)
         self.assertIn("import `yaml`", out)
         self.assertNotIn("`<模組>`", out)
 
