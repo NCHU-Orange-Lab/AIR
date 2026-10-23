@@ -1,8 +1,8 @@
 """正式驗收：架構檢查＋專案測試（收尾時再加暫時允許與層外模組的檢查），結果綁定這一版程式碼，寫成可追溯的紀錄。
 
 `check` 是快速診斷；`verify` 回答「這一份程式碼有沒有通過全部必要的檢查」。
-紀錄存在 .air/verify.json（本機，不進版本控制），帶著程式碼、設定與 AIR 版本的指紋：
-任一項改變，紀錄就過期（stale），階段轉移時不能拿來用。
+紀錄存在 .air/branches/<分支>/verify.json（本機，不進版本控制；依分支分開，切換分支不會互相覆蓋或誤判），
+帶著程式碼、設定與 AIR 版本的指紋：任一項改變，紀錄就過期（stale），階段轉移時不能拿來用。
 
 這是工作紀錄，不是防偽證明：有寫入權限的人（或 AI）可以改它。要可信的關卡，請在 CI 重新執行 verify。
 """
@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -22,7 +23,7 @@ from . import usage
 from .checks import Report, check, rel
 from .config import KIT_DIR, PROJECT_FILE, Config
 
-RECEIPT_FILE = Path(".air") / "verify.json"
+BRANCHES_DIR = Path(".air") / "branches"  # 本機紀錄依分支分開：verify.json、review.json、last-check.json
 SCHEMA = "air.verify.v1"
 SCOPES = ("batch", "final")
 OUTPUT_TAIL = 3000  # 測試輸出只保留結尾這麼多字
@@ -41,6 +42,28 @@ def git(root: Path, *args: str) -> str | None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
     return out.stdout.strip()
+
+
+# ── 分支與紀錄位置 ──
+
+def branch_name(root: Path) -> str:
+    """目前的分支名稱；detached 是 detached-<sha12>，不是 git repo 是 no-git。"""
+    if git(root, "rev-parse", "--show-toplevel") is None:
+        return "no-git"
+    name = git(root, "symbolic-ref", "--short", "-q", "HEAD")  # 還沒有 commit 的新 repo 也答得出來
+    if name:
+        return name
+    head = git(root, "rev-parse", "HEAD")
+    return f"detached-{head[:12]}" if head else "no-git"
+
+
+def branch_slug(name: str) -> str:
+    return re.sub(r"[^\w.-]", "_", name)[:80] or "_"
+
+
+def records_dir(root: Path) -> Path:
+    """這個分支的本機紀錄目錄（實戰中 A 的驗收與審查紀錄會被 B 蓋掉；切分支之後紀錄也對不上）。"""
+    return root / BRANCHES_DIR / branch_slug(branch_name(root))
 
 
 # ── 指紋 ──
@@ -179,7 +202,7 @@ def verify(cfg: Config, scope: str = "batch") -> dict:
     after = fingerprint(cfg)
     if not same_fingerprint(before, after):
         reasons.append("驗收期間程式碼或設定有變更（測試會改到 .py 檔？），請重新執行")
-    receipt = {"schema": SCHEMA, "time": now(), "scope": scope, "fingerprint": after,
+    receipt = {"schema": SCHEMA, "time": now(), "scope": scope, "branch": branch_name(cfg.root), "fingerprint": after,
                "checks": checks, "accepted": not reasons, "reasons": reasons}
     write_receipt(cfg.root, receipt)
     tests = next((c for c in checks if c["name"] == "project-tests"), {})
@@ -208,11 +231,11 @@ def load_json(path: Path, schema: str) -> dict | None:
 
 
 def write_receipt(root: Path, receipt: dict) -> None:
-    write_json(root / RECEIPT_FILE, receipt)
+    write_json(records_dir(root) / "verify.json", receipt)
 
 
 def load_receipt(root: Path) -> dict | None:
-    return load_json(root / RECEIPT_FILE, SCHEMA)
+    return load_json(records_dir(root) / "verify.json", SCHEMA)
 
 
 def receipt_state(cfg: Config, receipt: dict | None) -> str:
@@ -251,6 +274,7 @@ def format_receipt(receipt: dict) -> str:
     fp = receipt["fingerprint"]
     head = (fp["head"] or "沒有 commit")[:12] + ("（工作樹有未提交的修改）" if fp["dirty"] else "")
     lines.append(f"  版本：{head}")
-    outcome = "通過，紀錄已寫入 .air/verify.json" if receipt["accepted"] else "未通過 — " + "；".join(receipt["reasons"])
+    where = f"{BRANCHES_DIR.as_posix()}/{branch_slug(receipt.get('branch', ''))}/verify.json"
+    outcome = f"通過，紀錄已寫入 {where}" if receipt["accepted"] else "未通過 — " + "；".join(receipt["reasons"])
     lines.append(f"結果：{outcome}")
     return "\n".join(lines)

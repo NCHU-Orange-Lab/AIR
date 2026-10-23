@@ -206,6 +206,7 @@ class TestPathRules(ProjectTestCase):
 
 class TestHookScripts(ProjectTestCase):
     git = True
+    stop_scope = "all"  # 這裡測的是腳本接線，不是 Stop 的範圍：用整個專案的檢查，setUp 的 bad.py 才會被抓到
 
     def setUp(self):
         super().setUp()
@@ -321,11 +322,22 @@ class TestFullInstall(ProjectTestCase):
         self.assertIn(".claude/rules/：各層規則 created 7", r.stdout)
         self.assertTrue(os.access(self.p.root / ".git" / "hooks" / "pre-commit", os.X_OK))
         ignore = (self.p.root / ".air" / ".gitignore").read_text(encoding="utf-8").split()
-        for name in ("python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log", "last-check.json", "metrics.jsonl"):
+        for name in ("python", "hosts", "branches", "sessions", "hook-errors.log", "metrics.jsonl"):
             self.assertIn(name, ignore)
+        self.assertNotIn("verify.json", ignore)  # 2.7.1 起本機紀錄都在 branches/ 底下
         r2 = self.p.air("install")
         self.assertEqual(r2.returncode, 0)
         self.assertIn("unchanged", r2.stdout)
+
+    def test_old_record_files_are_removed_on_install(self):
+        for name in ("verify.json", "review.json", "last-check.json"):
+            self.p.write(f".air/{name}", "{}")
+        r = self.p.air("install")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("移除 .air/verify.json（本機紀錄改放 .air/branches/<分支>/）", r.stdout)
+        for name in ("verify.json", "review.json", "last-check.json"):
+            self.assertFalse((self.p.root / ".air" / name).exists(), name)
+        self.assertNotIn("移除 .air/verify.json", self.p.air("install").stdout)  # 第二次沒有東西要移
 
     def test_dirty_worktree_is_fine_and_the_commit_list_only_has_air_paths(self):
         # 報告 §4.8：730 個未追蹤的實驗檔，「安裝前要乾淨」等於裝不了。改成列出安裝動到的路徑，commit 時只加這些

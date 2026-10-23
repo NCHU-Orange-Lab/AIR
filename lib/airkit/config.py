@@ -8,7 +8,7 @@
   [migration]  phase、allow-legacy、exclude（不歸 AIR 管的路徑：不凍結、不進驗收指紋、不列進 survey 與層外清單；層內的檔案不受影響）
   [tests]      command、timeout（每批 verify 跑的測試指令）
   [verify]     fingerprint-extra：驗收指紋除了套件、tests、設定之外還要看的路徑
-  [hooks]      stop-scope：session（預設）或 all
+  [hooks]      stop-scope：session（預設；結束前只查這個 session 動過的檔案）或 all（整個專案）
 exclude 與 fingerprint-extra 都是「相對專案根目錄的目錄或檔案」，可以寫成 dir/**（意思一樣），不支援其他萬用字元。
 """
 

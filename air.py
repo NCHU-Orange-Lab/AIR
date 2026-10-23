@@ -2,12 +2,12 @@
 
   python3 AIR/air.py check [檔案 ...] [--json]      快速檢查（不給檔案時檢查所有層）
   python3 AIR/air.py verify [--scope batch|final] [--json]
-                                             正式驗收：架構檢查＋測試指令；結果綁定這一版程式碼，寫進 .air/verify.json
+                                             正式驗收：架構檢查＋測試指令；結果綁定這一版程式碼，寫進 .air/branches/<分支>/verify.json
   python3 AIR/air.py review [--base 分支] [--bundle] [--json]
                                              語意審查的範圍：這次變更改到的層內檔案、各要對照哪些沒有程式檢查的規則（做法見 skill air-review）
                                              --bundle 把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊
   python3 AIR/air.py review --result <檔案|-> [--base 分支]
-                                             交回審查結果（JSON）：驗證後寫進 .air/review.json；有 priority 0／1 的發現結束碼 1
+                                             交回審查結果（JSON）：驗證後寫進 .air/branches/<分支>/review.json；有 priority 0／1 的發現結束碼 1
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
                                              安裝接點（不指定 --host 時裝所有支援的宿主；最後列出要 commit 的路徑，工作樹不用先清乾淨）
   python3 AIR/air.py uninstall [--purge]
@@ -46,11 +46,11 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
 from airkit import context, doctor, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
-from airkit.checks import EXIT, check, format_grouped, grouped, rel  # noqa: E402
+from airkit.checks import EXIT, check, format_grouped, grouped, integrity_violations, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
 FIX_HINT = "依訊息中的規則編號讀對應層的規則（AIR/rules/<層>.md；前綴對照見 AIR/AGENTS.md）後修正。"
-STOP_GROUPS = 10  # 結束前的檢查最多印幾組違規（同一種違規算一組）；其餘寫進 .air/last-check.json
+STOP_GROUPS = 10  # 結束前的檢查最多印幾組違規（同一種違規算一組）；其餘寫進 .air/branches/<分支>/last-check.json
 
 
 def print_report(report, root: Path, show_soft: bool = True) -> None:
@@ -221,8 +221,10 @@ def hook_output(event_name: str, **fields) -> None:
 
 
 def hook_session_start(event: hosts.Event, cfg: Config) -> int:
-    """session 開始、壓縮或恢復後：清掉這個 session 的注入紀錄（Codex 下次碰到某層會重新附規則），附上目前狀態。"""
+    """session 開始、壓縮或恢復後：清掉這個 session 的注入紀錄（Codex 下次碰到某層會重新附規則），第一次開始時拍下各層 .py 的快照
+    （結束前的檢查用），附上目前狀態。"""
     context.reset(cfg.root, event.session_id)
+    context.take_snapshot(cfg, event.session_id)
     hook_output("SessionStart", additionalContext=context.session_context(cfg, event.host))
     return 0
 
@@ -257,6 +259,7 @@ def hook_pre_edit(event: hosts.Event, cfg: Config) -> int:
 
 
 def hook_post_edit(event: hosts.Event, cfg: Config) -> int:
+    context.remember_touched(cfg.root, event.session_id, event.files)  # 結束前的檢查用：這個 session 動過哪些檔案
     paths = [p for p in event.files if p.suffix == ".py"]
     if not paths:
         return 0
@@ -283,19 +286,29 @@ def hook_pre_bash(event: hosts.Event, cfg: Config) -> int:
 
 
 def hook_stop(event: hosts.Event, cfg: Config) -> int:
+    """結束前的檢查。預設（hooks.stop-scope = session）只看這個 session 動過的檔案：編輯工具記下的，加上 session 開始後內容變了的
+    層內 .py（Bash 改的靠快照抓）；別的 session 的半成品不會要這個 session 去修。AIR009 不分 session。stop-scope = all 則檢查所有層。"""
     if event.stop_active:
         return 0  # 已經因為 Stop hook 繼續過一次，放行，避免無限迴圈
-    report = check(cfg)
+    if cfg.stop_scope == "all":
+        report, scope_note = check(cfg), "所有層（hooks.stop-scope = all）"
+    else:
+        edited, changed, has_snapshot = context.stop_targets(cfg, event.session_id)
+        report = check(cfg, sorted({*edited, *changed}))
+        report.hard += integrity_violations(cfg.root)
+        scope_note = (f"這個 session 動過的 {len(edited)} 個檔案＋開始後內容變了的 {len(changed)} 個層內檔案"
+                      + ("" if has_snapshot else "；沒有 session 開始時的快照，只看編輯工具記下的"))
     if not report.hard:
         return 0
     groups = grouped(report.hard)
-    verify.write_json(cfg.root / ".air" / "last-check.json", report.to_dict(cfg.root))  # 完整清單在檔案裡，畫面只印前 10 組
-    usage.record(cfg.root, "stop-blocked", violations=len(report.hard), groups=len(groups))
-    print("結束前的全專案檢查未通過（可能包含用 Bash 修改、編輯時沒被檢查到的檔案）：", file=sys.stderr)
+    last_check = verify.records_dir(cfg.root) / "last-check.json"
+    verify.write_json(last_check, report.to_dict(cfg.root))  # 完整清單在檔案裡，畫面只印前 10 組
+    usage.record(cfg.root, "stop-blocked", violations=len(report.hard), groups=len(groups), scope=cfg.stop_scope)
+    print(f"結束前的檢查未通過（範圍：{scope_note}；其他違規由 commit 前檢查把關，python3 AIR/air.py check 可以先看）：", file=sys.stderr)
     for line in format_grouped(report.hard, cfg.root, limit=STOP_GROUPS):
         print(line, file=sys.stderr)
     if len(groups) > STOP_GROUPS:
-        print(f"…另有 {len(groups) - STOP_GROUPS} 組（共 {len(report.hard)} 個違規），完整清單在 .air/last-check.json", file=sys.stderr)
+        print(f"…另有 {len(groups) - STOP_GROUPS} 組（共 {len(report.hard)} 個違規），完整清單在 {rel(last_check, cfg.root)}", file=sys.stderr)
     print(f"\n{FIX_HINT}這是最後一次提醒，沒修好的違規會在 commit 時被擋下。", file=sys.stderr)
     return 2
 

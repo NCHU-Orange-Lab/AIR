@@ -51,7 +51,8 @@ class ReviewCase(ProjectTestCase):
         return self.p.air("review", "--result", "-", *args, stdin=json.dumps(data, ensure_ascii=False))
 
     def record(self) -> dict | None:
-        path = self.p.root / ".air" / "review.json"
+        from airkit import verify
+        path = verify.records_dir(self.p.root) / "review.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
@@ -233,7 +234,7 @@ class TestNotGit(ProjectTestCase):
         self.assertIn("不是 git repo", r.stderr)
 
     def test_status_with_record_but_no_git(self):
-        self.p.write(".air/review.json", json.dumps({"schema": review.SCHEMA, "time": "2026-01-01T00:00:00", "base": None, "ref": None,
+        self.p.write(".air/branches/no-git/review.json", json.dumps({"schema": review.SCHEMA, "time": "2026-01-01T00:00:00", "base": None, "ref": None,
                                                      "files": {}, "findings": [], "blocking": 0,
                                                      "overall": "pass", "explanation": ""}))
         self.assertIn("語意審查：無法判斷", self.p.air("status").stdout)
@@ -422,7 +423,8 @@ class TestResult(ReviewCase):
         self.assertEqual(json.loads(self.p.air("status", "--json").stdout)["last_review"]["state"], "fresh")
 
     def test_corrupt_record_is_treated_as_none(self):
-        self.p.write(".air/review.json", "{not json")
+        from airkit import verify
+        self.p.write(f"{verify.records_dir(self.p.root).relative_to(self.p.root).as_posix()}/review.json", "{not json")
         self.assertIn("語意審查：無（", self.p.air("status").stdout)
 
 

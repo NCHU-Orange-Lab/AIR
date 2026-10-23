@@ -172,6 +172,9 @@ class TestPreBash(ProjectTestCase):
 
 
 class TestStop(ProjectTestCase):
+    """hooks.stop-scope = all：整個專案的檢查（分組、上限、二次放行）。"""
+    stop_scope = "all"
+
     def setUp(self):
         super().setUp()
         self.p.layer("steps", bad=BAD)
@@ -196,10 +199,11 @@ class TestStop(ProjectTestCase):
             self.p.write(f"demo/steps/u_{m}.py", f"import {m}\n")  # 12 種不同的修法提示，加上 setUp 的 AIR001 共 13 組
         r = self.p.air("hook", "stop", stdin="{}")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("…另有 3 組（共 13 個違規），完整清單在 .air/last-check.json", r.stderr)
+        self.assertIn("…另有 3 組（共 13 個違規），完整清單在 .air/branches/no-git/last-check.json", r.stderr)
         self.assertEqual(r.stderr.count("AIR002"), 9)
-        full = json.loads((self.p.root / ".air" / "last-check.json").read_text(encoding="utf-8"))
+        full = json.loads((self.p.root / ".air" / "branches" / "no-git" / "last-check.json").read_text(encoding="utf-8"))
         self.assertEqual((full["schema"], len(full["hard"])), ("air.check.v1", 13))
+        self.assertIn("範圍：所有層（hooks.stop-scope = all）", r.stderr)
 
     def test_second_stop_lets_go_claude(self):
         r = self.p.air("hook", "stop", stdin=json.dumps({"stop_hook_active": True}))
@@ -213,6 +217,81 @@ class TestStop(ProjectTestCase):
         (self.p.root / "demo" / "steps" / "bad.py").unlink()
         r = self.p.air("hook", "stop", stdin="{}")
         self.assertEqual(r.returncode, 0)
+
+
+class TestStopSession(ProjectTestCase):
+    """預設 hooks.stop-scope = session：只管這個 session 動過的檔案。報告 §4.3 c：session B 什麼都沒改，卻因為另一個 session 的
+    半成品被擋下，還被要求去修別人正在改的檔案。"""
+    phase = "migrating"
+
+    def setUp(self):
+        super().setUp()
+        self.p.layer("steps", ok="x = 1\n")
+
+    def stop(self, session="b"):
+        return self.p.air("hook", "stop", stdin=json.dumps({"session_id": session}))
+
+    def start(self, session="b", source="startup"):
+        r = self.p.air("hook", "session-start", stdin=json.dumps({"session_id": session, "source": source}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_other_sessions_wip_does_not_block_a_session_that_touched_nothing(self):
+        self.p.write("demo/steps/wip_other_session.py", BAD)  # session A 的半成品，在 B 開始前就在
+        self.start()
+        r = self.stop()
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertEqual(self.p.air("hook", "stop", stdin=json.dumps({"session_id": "a"})).returncode, 0)  # 沒開始過的 session 也不會被別人的檔案擋
+        self.assertIn("AIR001", self.p.air("check").stdout)  # 違規還在，由 check 與 commit 前檢查把關
+
+    def test_files_edited_by_this_session_are_checked(self):
+        self.p.write("demo/steps/wip_other_session.py", BAD)
+        self.start()
+        mine = self.p.write("demo/steps/mine.py", BAD)
+        self.p.hook("post-edit", {"session_id": "b", "tool_name": "Edit", "tool_input": {"file_path": str(mine)}})
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("demo/steps/mine.py", r.stderr)
+        self.assertNotIn("wip_other_session", r.stderr)  # 別人的半成品不在範圍
+        self.assertIn("範圍：這個 session 動過的 1 個檔案＋開始後內容變了的 1 個層內檔案", r.stderr)
+        self.assertIn("python3 AIR/air.py check 可以先看", r.stderr)
+        self.assertIn("Stop 擋下 1 次", self.p.air("status").stdout)
+
+    def test_files_changed_by_bash_after_session_start_are_caught_by_the_snapshot(self):
+        self.start()
+        self.p.write("demo/steps/ok.py", BAD)  # 不經編輯工具（Bash）改的
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("demo/steps/ok.py", r.stderr)
+        self.assertIn("開始後內容變了的 1 個層內檔案", r.stderr)
+        self.p.write("demo/steps/ok.py", "x = 1\n")  # 改回快照時的內容就不算
+        self.assertEqual(self.stop().returncode, 0)
+
+    def test_snapshot_survives_compaction_and_touched_survives_reset(self):
+        self.start()
+        mine = self.p.write("demo/steps/mine.py", BAD)
+        self.p.hook("post-edit", {"session_id": "b", "tool_name": "Edit", "tool_input": {"file_path": str(mine)}})
+        self.p.write("demo/steps/ok.py", BAD)
+        self.start(source="compact")  # 壓縮後的 SessionStart：不重拍快照、不清 touched
+        r = self.stop()
+        self.assertIn("動過的 1 個檔案＋開始後內容變了的 2 個層內檔案", r.stderr)
+
+    def test_no_snapshot_means_only_tool_edits_count(self):
+        self.p.write("demo/steps/ok.py", BAD)
+        r = self.stop(session="never-started")
+        self.assertEqual(r.returncode, 0)  # 沒有快照、沒動過任何檔案：放行
+        mine = self.p.write("demo/steps/mine.py", BAD)
+        self.p.hook("post-edit", {"session_id": "never-started", "tool_name": "Edit", "tool_input": {"file_path": str(mine)}})
+        r = self.stop(session="never-started")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("沒有 session 開始時的快照", r.stderr)
+        self.assertNotIn("demo/steps/ok.py", r.stderr)
+
+    def test_integrity_is_checked_regardless_of_session(self):
+        self.start()
+        (self.p.root / "AIR" / "rules" / "steps.md").write_text("tampered\n", encoding="utf-8")  # 改 config.toml 會讓設定讀不了，hook 直接放行
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("AIR009", r.stderr)
 
 
 if __name__ == "__main__":

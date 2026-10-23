@@ -41,5 +41,6 @@ timeout = 600                   # 上限（秒）
 # fingerprint-extra = ["conftest.py", "pyproject.toml"]
 
 # [hooks]
-# 結束前的檢查範圍：session（預設；2.7.1 起只查這個 session 動過的檔與工作樹未提交的層內變更）或 all（整個專案）
+# 結束前的檢查範圍：session（預設）只查這個 session 動過的檔案（編輯工具記下的，加上 session 開始後內容變了的層內 .py），
+# 別的 session 的半成品不會要這個 session 去修；all 是整個專案。套件與接點的完整性（AIR009）兩種都查。
 # stop-scope = "session"

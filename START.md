@@ -84,7 +84,7 @@
 2. **搬移或拆分**：把程式搬進對應的層，必要時拆開（例如把讀檔和計算分開）。
    - 讓舊的 import 路徑繼續可用：在原本的舊模組裡保留轉接（`from shop.steps.orders import valid_orders`），呼叫端就不用一次全改。轉接在收尾時移除。
    - 新的層 import 了還沒搬的舊模組時，檢查會回報 AIR008。只有在這一批真的沒辦法先搬時，才**經使用者同意**加進 `migration.allow-legacy`，並寫上原因。
-3. **驗證**：`python3 AIR/air.py verify` 必須通過。它會執行專案的測試指令與架構檢查，並把結果綁定這一版程式碼記在 `.air/verify.json`；只跑 `check` 不算驗證。
+3. **驗證**：`python3 AIR/air.py verify` 必須通過。它會執行專案的測試指令與架構檢查，並把結果綁定這一版程式碼記在 `.air/branches/<分支>/verify.json`；只跑 `check` 不算驗證。
 4. **語意審查**：照 skill `air-review`（`python3 AIR/air.py review --bundle` 列出這批改到的檔案要對照哪些沒有程式檢查的規則，連差異一起印；審完把結果交回）。priority 0、1 的發現要處理，或向使用者說明為什麼不處理；處理後只有改過的檔案要重審。
 5. 更新遷移報告的「進度」一節。
 6. commit：`AIR 遷移第 N 批：<內容>`

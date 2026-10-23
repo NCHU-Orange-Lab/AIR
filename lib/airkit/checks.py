@@ -310,6 +310,11 @@ def cycle_violations(layer: Layer, cfg: Config, touched: set[Path] | None) -> li
 
 # ── 整體 ──
 
+def integrity_violations(root: Path) -> list[Violation]:
+    """套件與接點被動過（AIR009）：全專案檢查與結束前的檢查都要看，不分 session。"""
+    return [Violation(path, 1, 1, "AIR009", f"AIR 套件或接點被修改：{detail}。{integrity.FIX}") for path, detail in integrity.problems(root)]
+
+
 def check(cfg: Config, paths: list[Path] | None = None) -> Report:
     """paths 為 None 時檢查所有層；否則只檢查給定檔案中位於層內的 .py。沒檢查的檔案與原因記在 report.skipped。"""
     report, touched = Report(), {}
@@ -317,8 +322,7 @@ def check(cfg: Config, paths: list[Path] | None = None) -> Report:
         targets = [f for la in cfg.layers.values() for f in layer_files(la)]
         if cfg.package_dir.is_dir():
             report.legacy = [f for f in sorted(cfg.package_dir.rglob("*.py")) if layer_of(f, cfg) is None and not cfg.is_excluded(f)]
-        for path, detail in integrity.problems(cfg.root):  # 套件與接點被動過，最晚在這裡（結束前、commit 前）抓到
-            report.hard.append(Violation(path, 1, 1, "AIR009", f"AIR 套件或接點被修改：{detail}。{integrity.FIX}"))
+        report.hard += integrity_violations(cfg.root)  # 最晚在這裡（結束前、commit 前）抓到
     else:
         targets = []
         for p in paths:

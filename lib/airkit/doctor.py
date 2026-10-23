@@ -190,13 +190,14 @@ def _smoke(root: Path, host: hosts.Host) -> list[Item]:
     except (OSError, ValueError):
         return []
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root)}
+    payload = b'{"session_id": "air-doctor-smoke"}'  # SessionStart 會為這個 session 寫紀錄（快照）：跑完刪掉，doctor 不留痕跡
     items, ran = [], []
     for _event, command, script in install.air_hooks(data):
         if script in hosts.LEGACY_SCRIPTS:
             continue  # 退休的 hook 腳本已經不在套件裡，上面已經提醒重新安裝
         start = time.monotonic()
         try:
-            r = subprocess.run(["sh", "-c", command], cwd=root, input=b"{}", capture_output=True, timeout=SMOKE_TIMEOUT, env=env)
+            r = subprocess.run(["sh", "-c", command], cwd=root, input=payload, capture_output=True, timeout=SMOKE_TIMEOUT, env=env)
         except FileNotFoundError:
             return [Item(FAIL, host.label, "找不到 sh：hook 要用 POSIX shell 執行（Windows 請安裝 Git for Windows）")]
         except subprocess.TimeoutExpired:
@@ -214,6 +215,10 @@ def _smoke(root: Path, host: hosts.Host) -> list[Item]:
                 items.append(Item(FAIL, host.label, f"hook {script} 的輸出不是合法的 UTF-8 JSON（{type(e).__name__}）：宿主會忽略它"))
                 continue
         ran.append(ms)
+    smoke_state = root / ".air" / "sessions" / "air-doctor-smoke.json"
+    smoke_state.unlink(missing_ok=True)
+    if smoke_state.parent.is_dir() and not any(smoke_state.parent.iterdir()):
+        smoke_state.parent.rmdir()
     if not items:
         items.append(Item(OK, host.label, f"hook 冒煙測試：{len(ran)} 個都能執行（共 {sum(ran)} ms）"))
     return items
