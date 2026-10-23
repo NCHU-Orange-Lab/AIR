@@ -143,6 +143,77 @@ class TestTransition(ProjectTestCase):
         self.assertIn("未通過", r.stderr)
 
 
+class TestPause(ProjectTestCase):
+    """pause／resume：遷移擱置時的正式出口（實戰中遷移停在分析階段幾週，整個 repo 的 .py 都被凍結）。
+    階段保留、記進 history、status 顯示；暫停中不能推進階段。"""
+    git = True
+
+    def test_pause_needs_reason_and_is_recorded(self):
+        r = self.p.air("pause")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--reason", r.stderr)
+        self.assertIsNone(project.paused(self.p.root))
+        r = self.p.air("pause", "--reason", "先趕比賽")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("階段 installed 保留", r.stdout)
+        self.assertIn("resume", r.stdout)
+        entry = project.paused(self.p.root)
+        self.assertEqual((entry["phase"], entry["reason"]), ("installed", "先趕比賽"))
+        last = self.p.history()[-1]
+        self.assertEqual((last["from"], last["to"], last["how"], last["reason"]), ("installed", "installed", "pause", "先趕比賽"))
+        self.assertEqual(self.p.cfg().phase, "installed")  # 階段不動
+
+    def test_status_shows_the_pause_and_json_has_it(self):
+        self.p.air("pause", "--reason", "先趕比賽")
+        out = self.p.air("status").stdout
+        self.assertIn("遷移暫停中：", out)
+        self.assertIn("原因：先趕比賽", out)
+        self.assertIn("python3 AIR/air.py resume", out)
+        d = json.loads(self.p.air("status", "--json").stdout)
+        self.assertEqual((d["paused"]["phase"], d["paused"]["reason"]), ("installed", "先趕比賽"))
+        self.assertIn("先趕比賽", d["paused_text"])
+        self.assertEqual(self.p.air("resume").returncode, 0)
+        self.assertNotIn("遷移暫停中", self.p.air("status").stdout)
+        self.assertIsNone(json.loads(self.p.air("status", "--json").stdout)["paused"])
+
+    def test_phase_cannot_move_while_paused(self):
+        self.p.write(REPORT, "# 報告\n")
+        self.p.air("pause", "--reason", "x")
+        r = self.p.air("phase", "analyzed")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("暫停中", r.stderr)
+        self.assertIn("resume", r.stderr)
+        self.assertEqual(self.p.cfg().phase, "installed")
+        with self.assertRaises(project.TransitionError):
+            project.transition(self.p.cfg(), "installed", rollback=True, reason="r")
+
+    def test_pause_twice_resume_twice_and_done_are_rejected(self):
+        self.assertEqual(self.p.air("pause", "--reason", "x").returncode, 0)
+        r = self.p.air("pause", "--reason", "y")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("已經在暫停中", r.stderr)
+        self.assertEqual(project.paused(self.p.root)["reason"], "x")  # 第二次沒有覆蓋
+        r = self.p.air("resume")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("階段 installed", r.stdout)
+        self.assertFalse((self.p.root / ".air" / "paused.json").exists())
+        self.assertEqual([h["how"] for h in self.p.history()], ["pause", "resume"])
+        r = self.p.air("resume")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("沒有在暫停中", r.stderr)
+        project.set_phase(self.p.cfg(), "done")
+        r = self.p.air("pause", "--reason", "x")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("done", r.stderr)
+
+    def test_pause_record_is_versioned_but_not_hand_editable(self):
+        from airkit import install, protect
+        self.assertNotIn("paused.json", install.AIR_IGNORE)  # 跟階段一樣屬於專案，進版本控制
+        self.p.air("pause", "--reason", "x")
+        self.assertEqual(protect.classify(self.p.root / ".air" / "paused.json", self.p.cfg()).action, protect.DENY)
+        self.assertEqual(project.paused(self.p.root)["schema"], project.PAUSE_SCHEMA)
+
+
 class TestTransitionNoTestCommand(ProjectTestCase):
     def test_analyzed_requires_test_command(self):
         self.p.write(REPORT, "# 報告\n")

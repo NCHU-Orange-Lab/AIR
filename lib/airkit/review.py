@@ -155,6 +155,23 @@ def scope(cfg: Config, base: str | None = None) -> dict:
     }
 
 
+def bundle(cfg: Config, sc: dict) -> dict:
+    """把每個待審檔案的差異附進範圍（files[i]["diff"]）：改過的檔案是相對 ref 的 git diff，新檔案是整個內容加行號。
+
+    一次拿齊，審查者（自己或子 agent）不用再逐檔跑 git diff、讀檔；交給子 agent 時整段貼給它，它就不用重跑 review。
+    沿用的檔案不附（本來就不必重審）。
+    """
+    for f in sc["files"]:
+        if f["reused"]:
+            continue
+        if f["status"] == "untracked" or sc["ref"] is None:
+            text = (cfg.root / f["path"]).read_text(encoding="utf-8", errors="replace")
+            f["diff"] = "\n".join(f"{i:4d}│{line}" for i, line in enumerate(text.splitlines(), 1))
+        else:
+            f["diff"] = verify.git(cfg.root, "diff", "--relative", "--no-renames", sc["ref"], "--", f["path"]) or ""
+    return sc
+
+
 def _ranges(lines: list[list[int]] | None) -> str:
     return "整個檔案" if lines is None else "、".join(f"{a}–{b}" if a != b else str(a) for a, b in lines)
 
@@ -185,10 +202,19 @@ def format_scope(sc: dict) -> str:
         lines.append("  不在範圍：" + "、".join(f"{f['path']}（{f['why']}）" for f in shown) + more)
     tracked = [f["path"] for f in todo if f["status"] != "untracked"]
     fresh = [f["path"] for f in todo if f["status"] == "untracked"]
-    if tracked and sc["ref"]:
-        lines.append(f"看差異：git diff --no-renames {sc['ref'][:12]} -- " + " ".join(tracked))
-    if fresh:
-        lines.append("新檔案（整個檔案都在範圍，直接讀）：" + " ".join(fresh))
+    bundled = [f for f in todo if "diff" in f]
+    if bundled:
+        lines.append(f"── 差異（--bundle：底下 {len(bundled)} 個待審檔案的差異都在這裡，不用再跑 git diff 或讀檔；新檔案是整個內容加行號）")
+        for f in bundled:
+            lines.append(f"=== {f['path']}（{STATUS[f['status']]}）")
+            lines.append(f["diff"])
+    else:
+        if tracked and sc["ref"]:
+            lines.append(f"看差異：git diff --no-renames {sc['ref'][:12]} -- " + " ".join(tracked))
+        if fresh:
+            lines.append("新檔案（整個檔案都在範圍，直接讀）：" + " ".join(fresh))
+        if todo:
+            lines.append("一次拿齊範圍與差異：python3 AIR/air.py review --bundle")
     if todo:
         lines.append("審完交回：python3 AIR/air.py review --result - <<'EOF' … EOF（JSON 格式見 skill air-review；只交這次審的檔案，沿用的不用再列）")
     elif reused:

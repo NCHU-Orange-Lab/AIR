@@ -132,6 +132,22 @@ class TestSessionStart(ProjectTestCase):
         self.assertNotIn("【AIR/START.md", text)
         self.assertEqual(context.stage_text(9), "")
 
+    def test_paused_replaces_the_phase_guidance_and_skips_start_md(self):
+        from airkit import project
+        project.pause(self.p.cfg(), "先趕比賽")
+        text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("現在該做的事：遷移暫停中", text)
+        self.assertIn("先趕比賽", text)
+        self.assertIn("python3 AIR/air.py resume", text)
+        self.assertIn("不要自己執行", text)
+        self.assertIn("新程式仍寫進對應的層", text)
+        self.assertNotIn("不修改 .py（會被擋下）", text)  # 不再催分析階段的事
+        self.assertNotIn("【AIR/START.md", text)       # 也不附那一節
+        project.resume(self.p.cfg())
+        text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("分析階段", text)
+        self.assertIn("【AIR/START.md 階段 2", text)
+
     def test_guidance_follows_phase(self):
         from airkit import project
         project.set_phase(self.p.cfg(), "migrating")

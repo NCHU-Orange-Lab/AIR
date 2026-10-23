@@ -16,7 +16,9 @@ from .config import KIT_DIR, Config
 RULE_RE = re.compile(r"^- \*\*(?P<id>(?P<prefix>[A-Z]+)-(?P<number>\d+))【(?P<level>必須|建議)】\*\* (?P<body>.+?)\s*$")
 MARK_RE = re.compile(r"〔(?P<mark>[^〕]+)〕\s*$")
 FULL, PARTIAL, NONE = "full", "partial", "none"  # 程式檢查的涵蓋程度
-MAX_PER_FILE = 6  # 規範說明：每層最多 6 條
+MAX_PER_FILE = 6         # 規範說明：每層最多 6 條
+MAX_RULE_CHARS = 200     # 一條規則的本文（不含標記）最多這麼多字：規則會逐層附進對話，每多一句都是每個 session 的成本
+AGENTS_MAX_CHARS = 1500  # AIR/AGENTS.md 全文的上限：它在每一輪對話都在；tests/test_rules.py 核對
 
 
 @dataclass(frozen=True)

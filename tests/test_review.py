@@ -137,6 +137,44 @@ class TestScope(ReviewCase):
         self.assertEqual(sorted(sc["rules"]), ["flows", "steps"])
         self.assertTrue(all("rules" not in f for f in sc["files"]))
 
+    def test_bundle_attaches_diffs_so_nothing_has_to_be_reread(self):
+        # 子 agent 審查時原本要自己重跑 review、git diff、讀新檔案：--bundle 一次印齊，整段貼給它就好
+        self.p.write("demo/flows/report.py", FLOW_AFTER)
+        self.p.write("demo/steps/calc.py", STEP_NEW)
+        r = self.p.air("review", "--bundle")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+        self.assertIn("── 差異（--bundle：底下 2 個待審檔案", out)
+        self.assertIn("=== demo/flows/report.py（修改）", out)
+        self.assertIn("+    valid = [o for o in orders if o.amount > 0]", out)
+        self.assertIn("=== demo/steps/calc.py（新檔案）", out)
+        self.assertIn("   1│def total(xs: list[int]) -> int:", out)  # 新檔案整個列出加行號，發現才指得出行
+        self.assertNotIn("看差異：git diff", out)
+        self.assertNotIn("直接讀）", out)
+        self.assertLess(out.index("【flows 的規則】"), out.index("── 差異"))  # 規則在前，差異在後
+        self.assertIn("review --result -", out)
+        sc = self.scope("--bundle")
+        self.assertTrue(all("diff" in f for f in sc["files"]))
+        self.assertTrue(all("diff" not in f for f in self.scope()["files"]))
+        self.assertIn("python3 AIR/air.py review --bundle", self.p.air("review").stdout)  # 沒加時提示有這個選項
+        entries = [json.loads(line) for line in (self.p.root / ".air" / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([e["bundle"] for e in entries if e["kind"] == "review-scope"][:2], [True, True])
+
+    def test_bundle_skips_reused_files_and_cannot_go_with_result(self):
+        self.p.write("demo/flows/report.py", FLOW_AFTER)
+        self.assertEqual(self.submit(result()).returncode, 0)
+        self.p.write("demo/steps/calc.py", STEP_NEW)
+        by = {f["path"]: f for f in self.scope("--bundle")["files"]}
+        self.assertTrue(by["demo/flows/report.py"]["reused"])
+        self.assertNotIn("diff", by["demo/flows/report.py"])
+        self.assertIn("diff", by["demo/steps/calc.py"])
+        out = self.p.air("review", "--bundle").stdout
+        self.assertIn("底下 1 個待審檔案", out)
+        self.assertNotIn("=== demo/flows/report.py", out)
+        r = self.p.air("review", "--bundle", "--result", "-", stdin="{}")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--bundle", r.stderr)
+
     def test_base_covers_commits_since_merge_base_and_uncommitted(self):
         self.git("branch", "base")
         self.git("checkout", "-q", "-b", "work")
@@ -180,6 +218,9 @@ class TestScopeWithoutHistory(ProjectTestCase):
                          [("demo/steps/__init__.py", "untracked"), ("demo/steps/calc.py", "untracked")])
         self.assertIn("還沒有 commit", self.p.air("review").stdout)
         self.assertEqual(self.p.air("review", "--base", "main").returncode, 2)
+        out = self.p.air("review", "--bundle").stdout  # 沒有 ref 可以 diff：整個檔案加行號
+        self.assertIn("=== demo/steps/calc.py（新檔案）", out)
+        self.assertIn("   1│def total", out)
 
 
 class TestNotGit(ProjectTestCase):

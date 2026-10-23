@@ -18,6 +18,8 @@ STDLIB_IO = {"os", "io", "pathlib", "shutil", "sys", "subprocess", "socket", "lo
 
 PHASES = ["installed", "analyzed", "planned", "layered", "migrating", "done"]
 HISTORY_FILE = Path(".air") / "history.jsonl"  # 每次階段轉移一行：時間、從哪到哪、commit、方式、原因
+PAUSE_FILE = Path(".air") / "paused.json"      # 遷移暫停中：跟階段一樣屬於專案，進版本控制
+PAUSE_SCHEMA = "air.paused.v1"
 
 
 class TransitionError(ValueError):
@@ -88,6 +90,8 @@ def transition(cfg: Config, phase: str, *, rollback: bool = False, force: bool =
         raise TransitionError(f"未知的階段：{phase}（可用：{'、'.join(PHASES)}）")
     if cfg.phase not in PHASES:
         raise TransitionError(f".air/project.toml 的 migration.phase 是未知的值：{cfg.phase}")
+    if (p := paused(cfg.root)) is not None:
+        raise TransitionError(f"遷移暫停中（{describe_pause(p)}）：先執行 python3 AIR/air.py resume，再推進階段。")
     if (rollback or force) and not reason.strip():
         raise TransitionError("--rollback / --force 必須加 --reason 說明原因（會記錄在 .air/history.jsonl）。")
     cur, new = PHASES.index(cfg.phase), PHASES.index(phase)
@@ -110,6 +114,45 @@ def transition(cfg: Config, phase: str, *, rollback: bool = False, force: bool =
     record(cfg.root, {"time": verify.now(), "from": cfg.phase, "to": phase, "head": verify.git(cfg.root, "rev-parse", "HEAD"),
                       "how": "rollback" if rollback else ("forced" if missing else "normal"), "reason": reason.strip() or None})
     return lines
+
+
+# ── 暫停與繼續 ──
+# 實戰中遷移停在分析階段好幾週，整個 repo 的 .py 都被凍結，使用者只能把 AIR 拆掉。暫停是正式的出口：
+# 保留階段，解除分析／計畫階段的凍結，session 開始時改附「暫停中」而不是該階段的做法；架構檢查照常。
+
+def paused(root: Path) -> dict | None:
+    """暫停中的紀錄（time、phase、reason）；沒有暫停是 None。"""
+    return verify.load_json(root / PAUSE_FILE, PAUSE_SCHEMA)
+
+
+def describe_pause(entry: dict) -> str:
+    return f"{entry['time'][:16].replace('T', ' ')} 起，原因：{entry['reason']}"
+
+
+def pause(cfg: Config, reason: str) -> dict:
+    """暫停遷移：只由使用者要求時執行。要寫原因（之後每個 session 開始都會看到），並記進 history。"""
+    if not reason.strip():
+        raise TransitionError("pause 必須加 --reason 說明原因（之後每個 session 開始都會附上，並記錄在 .air/history.jsonl）。")
+    if cfg.phase == "done":
+        raise TransitionError("遷移已經完成（done），沒有要暫停的。")
+    if (p := paused(cfg.root)) is not None:
+        raise TransitionError(f"遷移已經在暫停中（{describe_pause(p)}）。要繼續請執行 python3 AIR/air.py resume。")
+    entry = {"schema": PAUSE_SCHEMA, "time": verify.now(), "phase": cfg.phase, "reason": reason.strip()}
+    verify.write_json(cfg.root / PAUSE_FILE, entry)
+    record(cfg.root, {"time": entry["time"], "from": cfg.phase, "to": cfg.phase, "head": verify.git(cfg.root, "rev-parse", "HEAD"),
+                      "how": "pause", "reason": entry["reason"]})
+    return entry
+
+
+def resume(cfg: Config) -> dict:
+    """繼續遷移：移除暫停紀錄，階段回到暫停前的那一格，並記進 history。回傳原本的暫停紀錄。"""
+    p = paused(cfg.root)
+    if p is None:
+        raise TransitionError("遷移沒有在暫停中。")
+    (cfg.root / PAUSE_FILE).unlink()
+    record(cfg.root, {"time": verify.now(), "from": cfg.phase, "to": cfg.phase, "head": verify.git(cfg.root, "rev-parse", "HEAD"),
+                      "how": "resume", "reason": None})
+    return p
 
 
 def record(root: Path, entry: dict) -> None:
@@ -218,6 +261,7 @@ def status_data(cfg: Config) -> dict:
     receipt = verify.load_receipt(cfg.root)
     reviewed = review.load_record(cfg.root)
     index = PHASES.index(cfg.phase) if cfg.phase in PHASES else -1
+    pause_entry = paused(cfg.root)
     return {
         "schema": "air.status.v1",
         "time": local_time(),
@@ -225,6 +269,8 @@ def status_data(cfg: Config) -> dict:
         "package_dir": cfg.package_dir.relative_to(cfg.root).as_posix(),
         "phase": cfg.phase,
         "next_phase": PHASES[index + 1] if 0 <= index < len(PHASES) - 1 else None,
+        "paused": None if pause_entry is None else {k: pause_entry[k] for k in ("time", "phase", "reason")},
+        "paused_text": None if pause_entry is None else describe_pause(pause_entry),
         "layers": [la.name for la in cfg.layers.values() if la.path.is_dir()],
         "checked_files": len(report.checked),
         "legacy_modules": len(report.legacy),
@@ -259,6 +305,7 @@ def status(cfg: Config) -> str:
         f"本機時間：{d['time']}",
         f"套件：{d['package']}（{d['package_dir']}）",
         f"遷移階段：{d['phase']}（{' → '.join(PHASES)}）",
+        *([f"遷移暫停中：{d['paused_text']}（python3 AIR/air.py resume 繼續；暫停期間照一般開發，架構檢查照常）"] if d["paused"] else []),
         f"已建立的層：{'、'.join(d['layers']) or '無'}",
         f"檢查範圍：層內 {d['checked_files']} 個檔案；舊程式碼模組 {d['legacy_modules']} 個（不檢查）",
         f"暫時允許的舊模組 import：{d['allow_legacy']}",

@@ -93,6 +93,28 @@ class TestReadOnlyDuringPlanning(ProjectTestCase):
         self.assertIn("計畫階段", d.reason)
 
 
+class TestPausedLiftsTheFreeze(ProjectTestCase):
+    phase = "installed"
+
+    def test_python_allowed_while_paused_but_protected_paths_still_denied(self):
+        from airkit import project
+        py = self.p.root / "demo" / "steps" / "a.py"
+        d = protect.classify(py, self.p.cfg())
+        self.assertEqual(d.action, DENY)
+        self.assertIn("pause --reason", d.reason)  # 擋下的訊息要指出正當的出口
+        project.pause(self.p.cfg(), "先趕比賽")
+        self.assertEqual(protect.classify(py, self.p.cfg()).action, ALLOW)
+        for rel in ("AIR/config.toml", ".claude/settings.json", ".air/history.jsonl", ".air/paused.json"):
+            with self.subTest(rel=rel):
+                self.assertEqual(protect.classify(self.p.root / rel, self.p.cfg()).action, DENY)
+        self.assertEqual(protect.classify(self.p.root / ".air" / "project.toml", self.p.cfg()).action, ASK)
+        r = self.p.hook("pre-edit", claude_edit(py))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("STEP-1", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])  # 解除凍結後照常附規則
+        project.resume(self.p.cfg())
+        self.assertEqual(protect.classify(py, self.p.cfg()).action, DENY)
+
+
 class TestWritablePhases(ProjectTestCase):
     def test_python_allowed_from_planned_onwards(self):
         from airkit import project

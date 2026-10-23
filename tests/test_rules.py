@@ -40,6 +40,18 @@ class TestCurrentRules(unittest.TestCase):
         self.assertIn(sentence, (KIT / "lib" / "airkit" / "review.py").read_text(encoding="utf-8"))
         self.assertEqual(re.findall(r"(\d+) 條規則沒有程式檢查", design), [str(none)])
 
+    def test_budget_of_agents_md_and_each_rule(self):
+        # AGENTS.md 每一輪對話都在、規則逐層附進對話：有字數上限，超過就先合併、刪除或改成程式檢查（規範說明 §6），不要放寬上限
+        from airkit import install
+        agents = install.agents_body()
+        self.assertLessEqual(len(agents), rules.AGENTS_MAX_CHARS, f"AGENTS.md 有 {len(agents)} 字")
+        for prefix, name in (("CTR", "contracts"), ("STEP", "steps"), ("FLOW", "flows"), ("ADP", "adapters"),
+                             ("IO", "storage"), ("MAIN", "main"), ("TEST", "tests")):
+            self.assertIn(f"`{prefix}`→{name}", agents)  # 違規訊息說「前綴對照見 AIR/AGENTS.md」，對照表不能被瘦身砍掉
+        self.assertIn("air-review", agents)  # 常駐規則 1 指向語意審查
+        for r in self.all:
+            self.assertLessEqual(len(r.text), rules.MAX_RULE_CHARS, f"{r.id} 有 {len(r.text)} 字")
+
     def test_same_layer_import_rules_match_config(self):
         # ADP-6、IO-4 說「同層可以、不能循環」：config 要真的允許同層 import，而且開著循環檢查、訊息指回這條規則
         kit = tomllib.loads((KIT / "config.toml").read_text(encoding="utf-8"))
