@@ -82,7 +82,8 @@ class TestClose(BatchCase):
         m = e["metrics"]
         self.assertEqual((m["verify_runs"], m["verify_accepted"], m["review_scope_runs"], m["post_edit_blocked"], m["stop_blocked"], m["review_results"]), (2, 2, 1, 1, 1, 0))
         self.assertGreater(m["review_scope_chars"], 100)
-        self.assertEqual(e["legacy_remaining"], 2)                       # demo/__init__.py 與 demo/old.py
+        self.assertEqual((e["legacy_remaining"], e["legacy_shims"]), (1, 1))  # demo/old.py 還有自己的程式；空的 demo/__init__.py 是空殼
+        self.assertEqual((e["review_blocking"], e["ack"]), (None, None))   # 沒有審查紀錄
         self.assertIn("git 統計不可用", r.stdout)
         # 第二批：時間窗只算第一批之後的事；git 統計從第一批的 HEAD 算
         first_head = e["head"]
@@ -184,6 +185,87 @@ class TestPauseAndWindow(BatchCase):
         self.assertEqual([e["how"] for e in self.p.history()], ["pause"])  # 沒有寫批次
         self.assertEqual(self.p.air("resume").returncode, 0)
         self.assertEqual(self.close().returncode, 0)
+
+
+def _finding(**overrides) -> dict:
+    base = {"rule": "STEP-6", "title": "回傳型別不明", "body": "total 沒有型別。", "confidence": 0.8, "priority": 1,
+            "path": "demo/steps/calc.py", "lines": {"start": 1, "end": 2}}
+    return {**base, **overrides}
+
+
+class TestUnresolvedP1(BatchCase):
+    CALC = "def total(xs):\n    return sum(xs)\n"
+
+    def review_with(self, *findings) -> None:
+        overall = "fail" if any(f["priority"] in (0, 1) for f in findings) else "pass"
+        data = {"findings": list(findings), "overall": overall, "explanation": "測試"}
+        r = self.p.air("review", "--result", "-", stdin=json.dumps(data))
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+
+    def setUp(self):
+        super().setUp()
+        self.p.write("demo/steps/calc.py", self.CALC)
+        self.review_with(_finding())
+        self.assertEqual(self.p.air("verify").returncode, 0)
+
+    def test_close_is_refused_while_the_review_record_has_a_p1(self):
+        r = self.close()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("1 個 priority 0／1 的發現沒有處理", r.stderr)
+        self.assertIn("demo/steps/calc.py:1", r.stderr)
+        self.assertIn("--ack", r.stderr)
+        self.assertEqual(self.p.history(), [])
+        self.assertEqual(self.close("--ack", "   ").returncode, 1)         # 理由是空白：一樣不收
+        self.assertEqual(self.p.history(), [])
+
+    def test_ack_with_a_reason_records_the_unresolved_findings(self):
+        r = self.close("--ack", "使用者同意：型別留到下一批")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("確認不處理 1 個 P1（使用者同意：型別留到下一批）", r.stdout)
+        e = self.p.history()[-1]
+        self.assertEqual(e["review_blocking"], 1)
+        self.assertEqual(e["ack"], {"reason": "使用者同意：型別留到下一批", "findings": ["P1 STEP-6 demo/steps/calc.py:1"]})
+        listing = self.p.air("batch", "list").stdout
+        self.assertIn("未解 P1", listing)
+        self.assertIn("1（已確認）", listing)
+
+    def test_fixing_and_re_reviewing_clears_it_and_ack_is_then_unused(self):
+        self.p.write("demo/steps/calc.py", "def total(xs: list[int]) -> int:\n    return sum(xs)\n")
+        self.review_with()                                                  # 改過的檔案重審，沒有發現
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        r = self.close("--ack", "不需要")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--ack 沒有用到", r.stdout)
+        e = self.p.history()[-1]
+        self.assertEqual((e["review_blocking"], e["ack"]), (0, None))
+        self.assertIn("| 0 |", self.p.air("batch", "list").stdout.replace("  ", " "))
+
+    def test_p2_findings_do_not_block(self):
+        self.review_with(_finding(priority=2, confidence=1))
+        r = self.close()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.p.history()[-1]["review_blocking"], 0)
+
+    def test_a_p1_in_the_record_still_counts_after_the_file_changed(self):
+        self.p.write("demo/steps/calc.py", self.CALC + "# 改了但還沒重審\n")
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        r = self.close()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("priority 0／1 的發現沒有處理", r.stderr)
+
+
+class TestLegacySplit(BatchCase):
+    def test_reexport_shells_are_counted_apart_from_modules_with_logic(self):
+        self.p.write("demo/shim.py", '"""搬走了。"""\nfrom demo.steps import x\n__all__ = ["x"]\n')
+        self.p.write("demo/real.py", "def f():\n    return 1\n")
+        self.p.write("demo/broken.py", "def (:\n")                          # 讀不懂：保守地算有程式
+        root = self.p.root / "demo"
+        self.assertEqual(batch.legacy_split([root / "shim.py", root / "real.py", root / "broken.py", root / "__init__.py"]), (2, 2))
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.assertEqual(self.close().returncode, 0)
+        e = self.p.history()[-1]
+        self.assertEqual((e["legacy_remaining"], e["legacy_shims"]), (3, 2))  # old.py、real.py、broken.py；shim.py 與 __init__.py
+        self.assertIn("舊模組剩 3（另有 2 個轉接檔）", self.p.air("status").stdout)
 
 
 class TestTimeParsing(unittest.TestCase):

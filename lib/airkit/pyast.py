@@ -150,3 +150,17 @@ def has_required_arg(node: ast.Call, keyword: str, position: int) -> bool:
     if any(isinstance(a, ast.Starred) for a in node.args):
         return True
     return len(node.args) > position and not _is_none(node.args[position])
+
+
+def is_reexport_shell(tree: ast.Module) -> bool:
+    """模組裡只有 docstring、import、pass 與 __all__：搬進層之後留在原地的轉接檔，或空的 __init__.py。沒有任何自己的邏輯。"""
+    for n in tree.body:
+        if isinstance(n, (ast.Import, ast.ImportFrom, ast.Pass)):
+            continue
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str):
+            continue
+        targets = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, (ast.AugAssign, ast.AnnAssign)) else []
+        if targets and all(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+            continue
+        return False
+    return True

@@ -91,7 +91,7 @@
 4. **語意審查**：照 skill `air-review`（`python3 AIR/air.py review --bundle` 列出這批改到的檔案要對照哪些沒有程式檢查的規則，連差異一起印；審完把結果交回）。priority 0、1 的發現要處理，或向使用者說明為什麼不處理；處理後只有改過的檔案要重審。
 5. 更新遷移報告的「進度」一節。
 6. commit：`AIR 遷移第 N 批：<內容>`
-7. `python3 AIR/air.py batch close --note "第 N 批：<內容>"`：把這批的代理指標（搬了幾檔幾行、審查範圍的字數、verify 幾次多久、擋下幾次、剩餘舊模組）記進 `.air/history.jsonl`；要先通過驗收。`python3 AIR/air.py batch list` 可以看每一批的成本，改版前後可以比較。
+7. `python3 AIR/air.py batch close --note "第 N 批：<內容>"`：把這批的代理指標（搬了幾檔幾行、審查範圍的字數、verify 幾次多久、擋下幾次、剩餘舊模組）記進 `.air/history.jsonl`；要先通過驗收；審查紀錄裡還有沒處理的 priority 0、1 時會拒絕，確定不處理要向使用者說明、經同意後加 `--ack "理由"`。這一步會改動 `.air/history.jsonl`（進版本控制）：跟下一批一起 commit。`python3 AIR/air.py batch list` 可以看每一批的成本，改版前後可以比較。
 
 **每一批結束都停下來**，向使用者報告這批改了什麼、測試結果、這批的指標，以及還剩幾批。等使用者核准後才進行下一批。
 

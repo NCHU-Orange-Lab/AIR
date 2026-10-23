@@ -416,6 +416,13 @@ class TestSurveyAndStatus(ProjectTestCase):
         self.assertIn("requests", out)
         self.assertIn("AIR001", out)
 
+    def test_survey_does_not_call_the_standard_library_third_party(self):
+        # 試跑時 importlib、secrets、uuid、zipfile、stat 都被算成第三方；沒有副作用的標準庫（stat、textwrap）不列，有副作用的歸到標準庫 I/O
+        self.p.write("demo/legacy.py", "import importlib\nimport secrets\nimport uuid\nimport zipfile\nimport stat\nimport textwrap\nimport requests\nx = 1\n")
+        row = next(r for r in project.survey_rows(self.p.cfg()) if r["module"] == "demo.legacy")
+        self.assertEqual(row["third_party"], ["requests"])
+        self.assertEqual(row["stdlib_io"], ["importlib", "secrets", "uuid", "zipfile"])
+
     def test_status_summary(self):
         self.p.layer("steps", bad='print("x")\n')
         self.p.write("demo/legacy.py", "y = 2\n")
@@ -515,6 +522,20 @@ class TestCheckCommand(ProjectTestCase):
         for name in ("a.py", "b.py", "c.py"):
             self.assertIn(f"demo/steps/{name}:1:1", r.stdout)
         self.assertEqual(len(json.loads(self.p.air("check", "--json").stdout)["hard"]), 3)  # --json 不分組
+
+    def test_legacy_imports_of_different_modules_share_one_group(self):
+        # 試跑時 AIR008 的訊息帶著模組名稱，每個都自成一組，去重對它無效
+        self.p.write("demo/old_a.py", "x = 1\n")
+        self.p.write("demo/old_b.py", "y = 2\n")
+        self.p.layer("steps", a="from demo import old_a\n", b="from demo import old_b\n", c="from demo import old_a\n")
+        r = self.p.air("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("AIR008 ×3：", r.stdout)
+        self.assertEqual(r.stdout.count("是尚未遷移的舊模組"), 1)          # 修法只印一次
+        for name in ("demo/steps/a.py:1:1", "demo/steps/b.py:1:1", "demo/steps/c.py:1:1"):
+            self.assertIn(name, r.stdout)
+        self.assertIn("`demo.old_a`", r.stdout)                           # 位置後面帶著是哪個模組，才知道要搬哪個
+        self.assertIn("`demo.old_b`", r.stdout)
 
     def test_soft_rules_never_fail(self):
         body = "\n".join(f"    x{i} = {i}" for i in range(45))

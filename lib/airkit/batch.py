@@ -7,19 +7,34 @@ post-edit 與 Stop 擋了幾次、審查交回幾次，再加上剩餘的舊模�
 
 from __future__ import annotations
 
+import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import project, review, usage, verify
 from .checks import check, layer_of, rel
 from .config import KIT_DIR, Config
+from .pyast import is_reexport_shell
 
 HOW = "batch"  # history.jsonl 的 how
 TRANSITIONS = ("normal", "forced", "rollback")  # 真正的階段轉移；pause／resume 的紀錄 to 也是 migrating，不算起點
 
 
 class BatchError(ValueError):
-    """不能結束這一批（階段不對、驗收沒通過或已過期）。"""
+    """不能結束這一批（階段不對、驗收沒通過或已過期、審查還有沒處理的 priority 0／1 又沒有確認）。"""
+
+
+def legacy_split(paths: list[Path]) -> tuple[int, int]:
+    """(還有自己邏輯的舊模組數, 轉接檔／空殼數)：搬完之後原模組常留成只 re-export 的轉接檔，不該讓進度停在原地。"""
+    real = shells = 0
+    for p in paths:
+        try:
+            shell = is_reexport_shell(ast.parse(p.read_text(encoding="utf-8")))
+        except (OSError, SyntaxError, ValueError):
+            shell = False  # 讀不了就保守地當成還有程式
+        shells += shell
+        real += not shell
+    return real, shells
 
 
 def _when(value: str | None) -> datetime | None:
@@ -92,8 +107,14 @@ def git_stats(cfg: Config, since_head: str | None) -> dict | None:
     return {"files": files, "insertions": ins, "deletions": dels, "layer_files_added": added, "layer_insertions": layer_ins}
 
 
-def close(cfg: Config, note: str = "") -> tuple[dict, list[str]]:
-    """結束這一批：前置是階段 migrating、驗收紀錄新鮮且通過；審查紀錄缺少或過期只提醒。回傳 (寫進 history 的那一筆, 提醒)。"""
+def _unresolved(rec: dict | None) -> list[dict]:
+    """審查紀錄裡 priority 0／1 的發現（紀錄本身記著，不看目前的狀態：改過的檔案還沒重審就仍然算沒處理）。"""
+    return [f for f in (rec or {}).get("findings", []) if f.get("priority") in review.BLOCKING]
+
+
+def close(cfg: Config, note: str = "", ack: str = "") -> tuple[dict, list[str]]:
+    """結束這一批：前置是階段 migrating、驗收紀錄新鮮且通過、審查紀錄裡沒有沒處理的 priority 0／1（或用 ack 寫明理由）；
+    審查紀錄缺少或過期只提醒。回傳 (寫進 history 的那一筆, 提醒)。"""
     if cfg.phase != "migrating":
         raise BatchError(f"只有在逐批遷移（phase = migrating）時才有批次可以結束；目前是 {cfg.phase}。")
     if (p := project.paused(cfg.root)) is not None:
@@ -104,22 +125,37 @@ def close(cfg: Config, note: str = "") -> tuple[dict, list[str]]:
     warnings = []
     rec = review.load_record(cfg.root)
     state = review.state(cfg, rec)
+    open_p = _unresolved(rec)
+    acked = None
+    if open_p and not ack.strip():
+        raise BatchError(f"審查紀錄裡還有 {len(open_p)} 個 priority 0／1 的發現沒有處理：{_where(open_p)}。"
+                         "處理之後重跑 air.py review（只有改過的檔案要重審）；確定不處理就向使用者說明，經同意後用 --ack \"理由\" 結束這一批。")
+    if open_p:
+        acked = {"reason": ack.strip(), "findings": [f"P{f['priority']} {f['rule']} {f['path']}:{f['lines']['start']}" for f in open_p]}
+    elif ack.strip():
+        warnings.append("--ack 沒有用到：審查紀錄裡沒有 priority 0／1 的發現")
     if state == "none":
         warnings.append("沒有語意審查紀錄：每批 commit 前照 skill air-review 審一次（審查不擋批次，只提醒）")
     elif state == "stale":
         warnings.append("語意審查紀錄已過期：" + review.describe(cfg, rec))
     since_time, since_head = window_start(cfg.root)
+    legacy_real, legacy_shells = legacy_split(check(cfg).legacy)
     entry = {
         "time": verify.now(), "from": cfg.phase, "to": cfg.phase, "head": verify.git(cfg.root, "rev-parse", "HEAD"), "how": HOW,
         "n": len(batches(cfg.root)) + 1, "note": note.strip() or None, "air": (KIT_DIR / "VERSION").read_text(encoding="utf-8").strip(),
         "since": {"time": since_time, "head": since_head},
         "metrics": metrics_between(cfg.root, since_time),
         "git": git_stats(cfg, since_head),
-        "legacy_remaining": len(check(cfg).legacy),
-        "review": state,
+        "legacy_remaining": legacy_real, "legacy_shims": legacy_shells,
+        "review": state, "review_blocking": len(open_p) if rec else None, "ack": acked,
     }
     project.record(cfg.root, entry)
     return entry, warnings
+
+
+def _where(findings: list[dict], limit: int = 3) -> str:
+    shown = [f"P{f['priority']} {f['path']}:{f['lines']['start']}" for f in findings[:limit]]
+    return "、".join(shown) + (f" 等 {len(findings)} 個" if len(findings) > limit else "")
 
 
 def describe(e: dict) -> str:
@@ -130,14 +166,26 @@ def describe(e: dict) -> str:
     note = f"「{e['note']}」" if e.get("note") else ""
     return (f"第 {e.get('n')} 批{note}（{when}，AIR {e.get('air')}）：{moved}；審查範圍 {m.get('review_scope_runs', 0)} 次共 {m.get('review_scope_chars', 0):,} 字、"
             f"交回 {m.get('review_results', 0)} 次；verify {m.get('verify_runs', 0)} 次 {m.get('verify_ms', 0) / 1000:.0f} 秒；"
-            f"post-edit 擋 {m.get('post_edit_blocked', 0)} 次、Stop 擋 {m.get('stop_blocked', 0)} 次；舊模組剩 {e.get('legacy_remaining')}")
+            f"post-edit 擋 {m.get('post_edit_blocked', 0)} 次、Stop 擋 {m.get('stop_blocked', 0)} 次；舊模組剩 {_legacy(e)}"
+            + (f"；確認不處理 {len(e['ack']['findings'])} 個 P1（{e['ack']['reason']}）" if e.get("ack") else ""))
+
+
+def _legacy(e: dict) -> str:
+    shims = e.get("legacy_shims")
+    return f"{e.get('legacy_remaining')}" + (f"（另有 {shims} 個轉接檔）" if shims else "")
+
+
+def _p1(e: dict) -> str:
+    """批次表的「未解 P1」欄：沒有審查紀錄是 -；有確認不處理的是「N（已確認）」。"""
+    n = e.get("review_blocking")
+    return "-" if n is None else f"{n}（已確認）" if e.get("ack") else str(n)
 
 
 def format_list(entries: list[dict]) -> str:
     if not entries:
         return "還沒有結束過任何一批（每批 commit 之後執行 python3 AIR/air.py batch close）。"
-    lines = ["批次 | 時間 | AIR | 搬進層（檔／行） | 改檔 | 審查範圍（次／字） | 交回 | verify（次／秒） | 擋下（post-edit／Stop） | 舊模組剩 | 備註",
-             "---|---|---|---|---|---|---|---|---|---|---"]
+    lines = ["批次 | 時間 | AIR | 搬進層（檔／行） | 改檔 | 審查範圍（次／字） | 交回 | verify（次／秒） | 擋下（post-edit／Stop） | 舊模組剩 | 未解 P1 | 備註",
+             "---|---|---|---|---|---|---|---|---|---|---|---"]
     for e in entries:
         m, g = e.get("metrics", {}), e.get("git") or {}
         lines.append(" | ".join(str(x) for x in [
@@ -145,7 +193,7 @@ def format_list(entries: list[dict]) -> str:
             f"{g.get('layer_files_added', '-')}／{g.get('layer_insertions', '-')}", g.get("files", "-"),
             f"{m.get('review_scope_runs', 0)}／{m.get('review_scope_chars', 0):,}", m.get("review_results", 0),
             f"{m.get('verify_runs', 0)}／{m.get('verify_ms', 0) / 1000:.0f}", f"{m.get('post_edit_blocked', 0)}／{m.get('stop_blocked', 0)}",
-            e.get("legacy_remaining"), e.get("note") or "",
+            _legacy(e), _p1(e), e.get("note") or "",
         ]))
     lines.append("（指標是這台機器 .air/metrics.jsonl 累計的；別台機器的 session 不在裡面）")
     return "\n".join(lines)

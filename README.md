@@ -100,7 +100,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查＋黃金重播，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試）。`[tests]` 有設 `results` 時，失敗都在既有失敗基準裡就算通過 |
 | `python3 AIR/air.py verify --record-baseline` | 跑測試，把目前失敗的測試記成基準（`.air/test-baseline.json`）；分析階段做一次 |
 | `python3 AIR/air.py golden record` | 跑黃金重播的指令，記下輸出檔的 sha256（`.air/golden.json`）；行為真的要改才重錄，由你決定 |
-| `python3 AIR/air.py batch close --note "第 N 批：…"` | 每批 commit 之後：把這批的代理指標（搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）記進 `.air/history.jsonl`；要先通過驗收 |
+| `python3 AIR/air.py batch close --note "第 N 批：…"` | 每批 commit 之後：把這批的代理指標（搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）記進 `.air/history.jsonl`；要先通過驗收；審查紀錄還有沒處理的 P1 時要經使用者同意後加 `--ack "理由"` |
 | `python3 AIR/air.py batch list` | 列出每一批的指標，改版前後可以比較 |
 | `python3 AIR/air.py review --bundle` | 語意審查的範圍：每層要對照的規則（只列一次）、這次改到的檔案，加上每個待審檔案的差異（一次拿齊）；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
 | `python3 AIR/air.py survey --out docs/air-survey.md` | 盤點現有程式碼：完整表寫進檔案，畫面只印摘要 |
