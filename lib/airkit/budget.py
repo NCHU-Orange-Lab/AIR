@@ -87,12 +87,13 @@ def _item(host: str, kind: str, path: Path, root: Path, home: Path, **kw) -> Ite
 
 
 def memory_slug(root: Path) -> str:
-    """Claude Code 的專案目錄名稱：路徑裡非英數字的字元都換成 -（由現有目錄反推：/home/x/AIR_project → -home-x-AIR-project）。"""
-    return re.sub(r"[^A-Za-z0-9-]", "-", str(root.resolve()))
+    """Claude Code 的專案目錄名稱：絕對路徑裡非英數字的字元都換成 -（由現有目錄反推：/home/x/AIR_project → -home-x-AIR-project）。
+    只做字元替換，不 resolve：呼叫端給絕對路徑（Windows 上 resolve 會把 /home/x 變成 D:/home/x 這種帶磁碟代號的路徑）。"""
+    return re.sub(r"[^A-Za-z0-9-]", "-", str(root))
 
 
 def memory_file(root: Path, home: Path) -> Path:
-    return home / ".claude" / "projects" / memory_slug(root) / "memory" / "MEMORY.md"
+    return home / ".claude" / "projects" / memory_slug(root.resolve()) / "memory" / "MEMORY.md"
 
 
 def first_line_beyond(path: Path, limit_bytes: int, limit_lines: int) -> int | None:
