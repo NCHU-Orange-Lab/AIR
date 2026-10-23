@@ -15,6 +15,7 @@ from .checks import check, layer_of, rel
 from .config import KIT_DIR, Config
 
 HOW = "batch"  # history.jsonl 的 how
+TRANSITIONS = ("normal", "forced", "rollback")  # 真正的階段轉移；pause／resume 的紀錄 to 也是 migrating，不算起點
 
 
 class BatchError(ValueError):
@@ -42,7 +43,7 @@ def window_start(root: Path) -> tuple[str | None, str | None]:
         if e.get("how") == HOW:
             return e.get("time"), e.get("head")
     for e in reversed(hist):
-        if e.get("to") == "migrating" and e.get("how") != HOW:
+        if e.get("to") == "migrating" and e.get("how") in TRANSITIONS:
             return e.get("time"), e.get("head")
     return None, None
 
@@ -95,6 +96,8 @@ def close(cfg: Config, note: str = "") -> tuple[dict, list[str]]:
     """結束這一批：前置是階段 migrating、驗收紀錄新鮮且通過；審查紀錄缺少或過期只提醒。回傳 (寫進 history 的那一筆, 提醒)。"""
     if cfg.phase != "migrating":
         raise BatchError(f"只有在逐批遷移（phase = migrating）時才有批次可以結束；目前是 {cfg.phase}。")
+    if (p := project.paused(cfg.root)) is not None:
+        raise BatchError(f"遷移暫停中（{project.describe_pause(p)}）：暫停期間沒有批次；要繼續請使用者執行 python3 AIR/air.py resume。")
     receipt = verify.load_receipt(cfg.root)
     if receipt is None or not receipt.get("accepted") or verify.receipt_state(cfg, receipt) != "fresh":
         raise BatchError(f"這一批還沒有通過驗收：{verify.describe(cfg, receipt)}。先讓 python3 AIR/air.py verify 通過（紀錄要與目前的程式碼一致）。")

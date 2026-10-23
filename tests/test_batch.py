@@ -144,7 +144,10 @@ class TestWindowFromTransition(ProjectTestCase):
         r = self.p.air("phase", "migrating")
         self.assertEqual(r.returncode, 0, r.stderr)
         transition = self.p.history()[-1]
-        self.assertEqual((transition["to"], transition["head"]), ("migrating", base))
+        self.assertEqual((transition["to"], transition["head"], transition["how"]), ("migrating", base, "normal"))
+        time.sleep(1.1)
+        self.assertEqual(self.p.air("pause", "--reason", "x").returncode, 0)  # 轉移之後暫停又繼續：起點仍是轉移
+        self.assertEqual(self.p.air("resume").returncode, 0)
         time.sleep(1.1)
         self.p.write("demo/steps/moved.py", "y = 2\n")
         self.p.commit("batch 1")
@@ -154,6 +157,33 @@ class TestWindowFromTransition(ProjectTestCase):
         self.assertEqual(e["since"], {"time": transition["time"], "head": base})
         self.assertEqual((e["metrics"]["survey_runs"], e["metrics"]["verify_runs"]), (0, 1))
         self.assertEqual((e["git"]["layer_files_added"], e["git"]["files"]), (1, 1))
+
+
+class TestPauseAndWindow(BatchCase):
+    def test_pause_and_resume_records_are_not_the_window_start(self):
+        # pause／resume 的 history 紀錄 to 也是 migrating：暫停過的專案第一批的起點曾經變成 resume 那一筆（v3.0.1 驗收時發現）
+        usage.record(self.p.root, "survey", modules=1, chars=10)
+        time.sleep(1.1)
+        self.assertEqual(self.p.air("pause", "--reason", "x").returncode, 0)
+        self.assertEqual(self.p.air("resume").returncode, 0)
+        self.assertEqual([e["how"] for e in self.p.history()], ["pause", "resume"])
+        self.assertEqual(batch.window_start(self.p.root), (None, None))  # 沒有真正的轉移：算全部
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.assertEqual(self.close().returncode, 0)
+        e = self.p.history()[-1]
+        self.assertEqual(e["since"], {"time": None, "head": None})
+        self.assertEqual(e["metrics"]["survey_runs"], 1)  # 暫停之前的也算進第一批
+
+    def test_close_is_refused_while_paused(self):
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        self.assertEqual(self.p.air("pause", "--reason", "先趕比賽").returncode, 0)
+        r = self.close()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("遷移暫停中", r.stderr)
+        self.assertIn("先趕比賽", r.stderr)
+        self.assertEqual([e["how"] for e in self.p.history()], ["pause"])  # 沒有寫批次
+        self.assertEqual(self.p.air("resume").returncode, 0)
+        self.assertEqual(self.close().returncode, 0)
 
 
 class TestTimeParsing(unittest.TestCase):
