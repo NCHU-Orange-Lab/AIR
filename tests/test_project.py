@@ -537,6 +537,14 @@ class TestCheckCommand(ProjectTestCase):
         self.assertIn("`demo.old_a`", r.stdout)                           # 位置後面帶著是哪個模組，才知道要搬哪個
         self.assertIn("`demo.old_b`", r.stdout)
 
+    def test_only_legacy_imports_are_merged_other_imports_keep_their_names(self):
+        # AIR002 的訊息也帶 import 名稱，但修法會因名稱而不同（提示依套件而定），不能併成一組看不出是哪個
+        self.p.layer("steps", a="import requests\n", b="import yaml\n")
+        out = self.p.air("check").stdout
+        self.assertIn("import `requests`", out)
+        self.assertIn("import `yaml`", out)
+        self.assertNotIn("`<模組>`", out)
+
     def test_soft_rules_never_fail(self):
         body = "\n".join(f"    x{i} = {i}" for i in range(45))
         self.p.layer("steps", long=f"def f():\n{body}\n    return x0\n")
