@@ -15,7 +15,9 @@
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
                                              安裝接點（不指定 --host 時裝所有支援的宿主；最後列出要 commit 的路徑，工作樹不用先清乾淨）
   python3 AIR/air.py uninstall [--purge]
-  python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查
+  python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查，
+                                             以及常駐內容到 80% 以上的警告
+  python3 AIR/air.py doctor --context [--json] 常駐內容的完整盤點：各宿主一開場載入的檔案、大小、上限與佔比、AIR 區塊的位置
   python3 AIR/air.py layers [層 ...]         建立分層目錄（預設全部）
   python3 AIR/air.py survey [--out 檔案]     盤點現有程式碼（Markdown；--out 寫進檔案，畫面只印摘要）
   python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
@@ -49,7 +51,7 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
+from airkit import budget, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
 from airkit.checks import EXIT, check, format_grouped, grouped, integrity_violations, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -162,6 +164,15 @@ def cmd_uninstall(args) -> int:
 
 def cmd_doctor(args) -> int:
     root = project_root()
+    if args.context:
+        try:
+            cfg = load()
+        except ConfigError:
+            cfg = None  # 沒安裝也能盤點宿主的檔案，只是少了 AIR 自己的注入
+        items = doctor.context_report(root, cfg)
+        print(json.dumps({"schema": "air.context.v1", "items": [it.to_dict() for it in items]}, ensure_ascii=False, indent=2) if args.json
+              else budget.format_table(items))
+        return 1 if any(it.level == budget.FAIL for it in items) else 0
     items = doctor.diagnose(root)
     print(json.dumps(doctor.to_dict(root, items), ensure_ascii=False, indent=2) if args.json else doctor.format_report(root, items))
     return doctor.exit_code(items)
@@ -383,6 +394,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("uninstall")
     p.add_argument("--purge", action="store_true")
     p = sub.add_parser("doctor")
+    p.add_argument("--context", action="store_true", help="常駐內容的完整盤點（一開場載入的檔案、上限、佔比、AIR 區塊的位置）")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("layers")
     p.add_argument("names", nargs="*")

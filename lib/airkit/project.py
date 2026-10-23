@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import golden, hooklog, install, review, usage, verify
+from . import budget, golden, hooklog, install, review, usage, verify
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source, rel
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
@@ -294,6 +294,7 @@ def status_data(cfg: Config) -> dict:
         "hook_errors_text": hooklog.describe(cfg.root),
         "usage": usage.summary(cfg.root),
         "usage_text": usage.describe(cfg.root),
+        "context_budget": budget.status_line(cfg.root),  # 只有到 80% 以上才有值
         "test_command": cfg.test_command,
         "test_results": cfg.test_results,
         "final_command": cfg.final.command if cfg.final else None,
@@ -332,6 +333,7 @@ def status(cfg: Config) -> str:
         f"commit 前檢查：{d['commit_check']}",
         f"hook 錯誤（24 小時內）：{d['hook_errors_text']}",
         f"成本指標（本機累計）：{d['usage_text']}",
+        *([f"常駐內容：{d['context_budget']}"] if d["context_budget"] else []),
         f"測試指令：{d['test_command'] or '（尚未設定）'}" + (f"；收尾：{d['final_command']}" if d["final_command"] else ""),
         *([f"既有失敗基準：{'、'.join(f'{k} {v} 個' for k, v in d['baseline'].items()) or '還沒記錄（python3 AIR/air.py verify --record-baseline）'}"] if d["test_results"] else []),
         *([f"黃金重播：{d['golden_text']}"] if d["golden_text"] else []),
