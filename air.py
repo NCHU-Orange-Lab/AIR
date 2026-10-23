@@ -7,6 +7,9 @@
   python3 AIR/air.py verify --record-baseline [--scope batch|final]
                                              跑測試，把目前失敗的測試記成基準（.air/test-baseline.json，進版本控制；分析階段做一次）
   python3 AIR/air.py golden record [名稱 ...]  跑黃金重播的指令，把輸出檔的 sha256 記進 .air/golden.json（只由使用者決定何時重錄）
+  python3 AIR/air.py batch close [--note 說明]  結束這一批（commit 之後）：把這批的代理指標記進 .air/history.jsonl
+                                             （搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）；要先通過驗收
+  python3 AIR/air.py batch list              列出每一批的指標，改版前後可以比較
   python3 AIR/air.py review [--base 分支] [--bundle] [--json]
                                              語意審查的範圍：這次變更改到的層內檔案、各要對照哪些沒有程式檢查的規則（做法見 skill air-review）
                                              --bundle 把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊
@@ -51,7 +54,7 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import budget, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
+from airkit import batch, budget, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
 from airkit.checks import EXIT, check, format_grouped, grouped, integrity_violations, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -97,6 +100,23 @@ def cmd_verify(args) -> int:
     receipt = verify.verify(cfg, args.scope)
     print(json.dumps(receipt, ensure_ascii=False, indent=2) if args.json else verify.format_receipt(receipt))
     return verify.exit_code(receipt)
+
+
+def cmd_batch(args) -> int:
+    cfg = load()
+    if args.action == "list":
+        print(batch.format_list(batch.batches(cfg.root)))
+        return 0
+    try:
+        entry, warnings = batch.close(cfg, args.note)
+    except batch.BatchError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
+    print(f"這一批已記進 .air/history.jsonl：{batch.describe(entry)}")
+    for w in warnings:
+        print(f"  注意：{w}")
+    print("停下來向使用者報告這批改了什麼、測試結果與上面的指標，等核准後才進行下一批。")
+    return 0
 
 
 def cmd_golden(args) -> int:
@@ -382,6 +402,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("golden")
     p.add_argument("action", choices=["record"])
     p.add_argument("names", nargs="*", help="只記這些（預設全部）")
+    p = sub.add_parser("batch")
+    p.add_argument("action", choices=["close", "list"])
+    p.add_argument("--note", default="", help="這一批做了什麼（例如「第 3 批：搬 storage」）")
     p = sub.add_parser("review")
     p.add_argument("--base", help="審整個分支：相對這個分支（或 commit）的 merge-base；預設相對 HEAD")
     p.add_argument("--result", help="交回審查結果的 JSON 檔案；- 表示從 stdin 讀")
@@ -418,7 +441,7 @@ def main(argv: list[str]) -> int:
     handlers = {
         "check": cmd_check, "verify": cmd_verify, "review": cmd_review, "install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor,
         "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "pause": cmd_pause, "resume": cmd_resume,
-        "hook": cmd_hook, "manifest": cmd_manifest, "golden": cmd_golden,
+        "hook": cmd_hook, "manifest": cmd_manifest, "golden": cmd_golden, "batch": cmd_batch,
     }
     try:
         return handlers[args.cmd](args)

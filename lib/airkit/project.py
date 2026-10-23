@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import budget, golden, hooklog, install, review, usage, verify
+from . import batch, budget, golden, hooklog, install, review, usage, verify
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source, rel
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
@@ -295,6 +295,7 @@ def status_data(cfg: Config) -> dict:
         "usage": usage.summary(cfg.root),
         "usage_text": usage.describe(cfg.root),
         "context_budget": budget.status_line(cfg.root),  # 只有到 80% 以上才有值
+        "last_batch": (batch.batches(cfg.root) or [None])[-1],
         "test_command": cfg.test_command,
         "test_results": cfg.test_results,
         "final_command": cfg.final.command if cfg.final else None,
@@ -339,6 +340,7 @@ def status(cfg: Config) -> str:
         *([f"黃金重播：{d['golden_text']}"] if d["golden_text"] else []),
         f"最近驗收：{d['last_verify_text']}",
         f"語意審查：{d['last_review_text']}",
+        *([f"最近一批：{batch.describe(d['last_batch'])}"] if d["last_batch"] else []),
     ]
     return "\n".join(lines)
 
