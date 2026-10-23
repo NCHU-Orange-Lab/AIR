@@ -93,8 +93,9 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 指令 | 做什麼 |
 |---|---|
-| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查 |
-| `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查 |
+| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查；常駐內容到 80% 以上時多一行 |
+| `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查；常駐內容到 80% 以上也會列出 |
+| `python3 AIR/air.py doctor --context` | 常駐內容的完整盤點：各工具一開場載入的檔案（CLAUDE.md 鏈、沒有 `paths` 的規則、自動記憶索引、Codex 的 AGENTS.md 鏈）、大小、上限與佔比、AIR 區塊的位置 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
 | `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查＋黃金重播，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試）。`[tests]` 有設 `results` 時，失敗都在既有失敗基準裡就算通過 |
 | `python3 AIR/air.py verify --record-baseline` | 跑測試，把目前失敗的測試記成基準（`.air/test-baseline.json`）；分析階段做一次 |

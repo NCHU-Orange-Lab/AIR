@@ -1,5 +1,5 @@
 """air doctor：診斷接線。Python、設定、套件完整性、指引、每個宿主的 hook、skill 與路徑規則（含真的跑一次的冒煙測試）、
-舊版留下的檔案、commit 前檢查、最近的 hook 錯誤。
+舊版留下的檔案、commit 前檢查、最近的 hook 錯誤、常駐內容的預算（--context 印完整表；沒加也列出到 80% 以上的）。
 
 只讀，不修改任何東西；修法都是明確的指令（多半是 sh AIR/install.sh）。
 """
@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import hooklog, hosts, install, integrity
+from . import budget, hooklog, hosts, install, integrity
 from .config import Config, ConfigError, load
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -245,6 +245,19 @@ def _commit_check(root: Path) -> Item:
     return Item(OK, "commit 前檢查", status)
 
 
+def _context(root: Path, cfg: Config | None) -> list[Item]:
+    """常駐內容：只把到 80% 以上的列進來（完整表用 doctor --context）。"""
+    out = []
+    for it in budget.problems(budget.inventory(root, cfg, with_air=False)):
+        out.append(Item(FAIL if it.level == budget.FAIL else WARN, "常駐內容", budget.describe(it) + "（python3 AIR/air.py doctor --context）"))
+    return out
+
+
+def context_report(root: Path, cfg: Config | None) -> list[budget.Item]:
+    """doctor --context：完整的盤點（含 AIR 自己的 SessionStart 注入）。"""
+    return budget.inventory(root, cfg)
+
+
 def diagnose(root: Path) -> list[Item]:
     """診斷 root 這個專案（它的 AIR/ 是 root/AIR；在裝好的專案裡執行時就是 KIT_DIR）。"""
     config_item, cfg = _config(root)
@@ -257,6 +270,7 @@ def diagnose(root: Path) -> list[Item]:
     items += _stale_rules(root, cfg)
     items.append(_commit_check(root))
     items += _hook_errors(root)
+    items += _context(root, cfg)
     return items
 
 
