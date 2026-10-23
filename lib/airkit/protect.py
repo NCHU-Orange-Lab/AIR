@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import project
 from .config import PROJECT_FILE, REPORT_FILE, Config
 from .hosts import HOSTS
 from .install import SKILL_MARK
@@ -56,6 +57,7 @@ def classify(path: Path, cfg: Config) -> Decision:
     if _managed_skill(parts, cfg.root):
         return Decision(DENY, "這個 skill 由 AIR 複製，更新 AIR 時會覆蓋。要修改請在 AIR 的開發 repo 改。")
     stage = READ_ONLY_PHASES.get(cfg.phase)
-    if stage and rel.suffix == ".py":
-        return Decision(DENY, f"目前在{stage}階段（phase = {cfg.phase}），不能修改程式。先完成遷移報告 {REPORT_FILE.as_posix()}，等使用者核准進入下一階段。")
+    if stage and rel.suffix == ".py" and project.paused(cfg.root) is None:  # 暫停中解除凍結：照一般開發
+        return Decision(DENY, f"目前在{stage}階段（phase = {cfg.phase}），不能修改程式。先完成遷移報告 {REPORT_FILE.as_posix()}，"
+                              "等使用者核准進入下一階段。遷移要先擱置時，由使用者執行 python3 AIR/air.py pause --reason <原因>。")
     return Decision(ALLOW)

@@ -83,14 +83,19 @@ def stage_text(stage: int) -> str:
 
 def session_context(cfg: Config) -> str:
     """session 開始、壓縮後附上的狀態摘要：由目前的設定、檢查結果與驗收紀錄重新算，不信任任何摘要。"""
-    guide = PHASE_GUIDE.get(cfg.phase, f"未知的階段 {cfg.phase}：請使用者檢查 .air/project.toml")
+    pause = project.paused(cfg.root)
+    if pause is not None:  # 暫停中：不催該階段的事，也不附 START.md；新程式仍要寫進對應的層
+        guide = (f"遷移暫停中（{project.describe_pause(pause)}；階段 {cfg.phase} 保留）：照一般開發進行，新程式仍寫進對應的層，"
+                 "改到哪一層就照那一層的規則；分析／計畫階段的 .py 凍結已解除。要繼續遷移，由使用者執行 python3 AIR/air.py resume，不要自己執行。")
+    else:
+        guide = PHASE_GUIDE.get(cfg.phase, f"未知的階段 {cfg.phase}：請使用者檢查 .air/project.toml")
     lines = [
         "【AIR 目前狀態（由 hook 在 session 開始與壓縮後附上）】",
         project.status(cfg),
         f"現在該做的事：{guide}",
         "規則：常駐規則在 AIR/AGENTS.md；第一次讀寫某一層的檔案時，hook 會附上那一層的規則（AIR/rules/<層>.md）。",
     ]
-    stage = STAGE_OF_PHASE.get(cfg.phase)
+    stage = STAGE_OF_PHASE.get(cfg.phase) if pause is None else None
     section = stage_text(stage) if stage else ""
     if section:
         lines += ["", f"【AIR/START.md 階段 {stage}（已附上這一節，不用再讀整份 START.md）】", section]

@@ -3,8 +3,9 @@
   python3 AIR/air.py check [檔案 ...] [--json]      快速檢查（不給檔案時檢查所有層）
   python3 AIR/air.py verify [--scope batch|final] [--json]
                                              正式驗收：架構檢查＋測試指令；結果綁定這一版程式碼，寫進 .air/verify.json
-  python3 AIR/air.py review [--base 分支] [--json]
+  python3 AIR/air.py review [--base 分支] [--bundle] [--json]
                                              語意審查的範圍：這次變更改到的層內檔案、各要對照哪些沒有程式檢查的規則（做法見 skill air-review）
+                                             --bundle 把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊
   python3 AIR/air.py review --result <檔案|-> [--base 分支]
                                              交回審查結果（JSON）：驗證後寫進 .air/review.json；有 priority 0／1 的發現結束碼 1
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
@@ -16,6 +17,8 @@
   python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
   python3 AIR/air.py phase <階段> [--rollback|--force] [--reason 原因]
                                              推進遷移階段（一次一格，會檢查前置條件；退回或強制要寫原因）
+  python3 AIR/air.py pause --reason 原因      暫停遷移（只由使用者要求時執行）：階段保留，分析／計畫階段的 .py 凍結解除，
+                                             session 開始改附「暫停中」；架構檢查照常。python3 AIR/air.py resume 繼續
   python3 AIR/air.py hook <session-start|pre-read|pre-edit|pre-bash|post-edit|stop> [--host claude|codex]
                                              給 hook 使用（從 stdin 讀 JSON；宿主的差異見 lib/airkit/hosts.py）
   python3 AIR/air.py manifest                重新產生 AIR/MANIFEST.sha256（維護 AIR 時在開發 repo 用；裝好的專案裡不能用）
@@ -78,15 +81,20 @@ def cmd_verify(args) -> int:
 
 
 def cmd_review(args) -> int:
-    """沒有 --result：印出審查範圍。有 --result：驗證交回的結果，通過才記錄（無效＝2，有待處理的發現＝1）。"""
+    """沒有 --result：印出審查範圍（--bundle 連差異一起）。有 --result：驗證交回的結果，通過才記錄（無效＝2，有待處理的發現＝1）。"""
     cfg = load()
     sc = review.scope(cfg, args.base)
     if args.result is None:
+        if args.bundle:
+            review.bundle(cfg, sc)
         text = json.dumps(sc, ensure_ascii=False, indent=2) if args.json else review.format_scope(sc)
         print(text)
         usage.record(cfg.root, "review-scope", chars=len(text), files=sum(1 for f in sc["files"] if not f["reused"]),
-                     reused=sum(1 for f in sc["files"] if f["reused"]))
+                     reused=sum(1 for f in sc["files"] if f["reused"]), bundle=args.bundle)
         return 0
+    if args.bundle:
+        print("錯誤：--bundle 只用在印範圍，不能跟 --result 一起用。", file=sys.stderr)
+        return 2
     text = sys.stdin.read() if args.result == "-" else Path(args.result).read_text(encoding="utf-8")
     try:
         data = json.loads(text)
@@ -178,6 +186,29 @@ def cmd_phase(args) -> int:
     for line in lines:
         print(f"  {line}")
     print(f"遷移階段：{args.phase}")
+    return 0
+
+
+def cmd_pause(args) -> int:
+    cfg = load()
+    try:
+        entry = project.pause(cfg, args.reason)
+    except project.TransitionError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
+    print(f"遷移已暫停（階段 {entry['phase']} 保留；原因：{entry['reason']}）。暫停期間照一般開發：分析／計畫階段的 .py 凍結解除，"
+          "新程式仍寫進對應的層，架構檢查照常；session 開始改附「暫停中」。要繼續遷移：python3 AIR/air.py resume")
+    return 0
+
+
+def cmd_resume(args) -> int:
+    cfg = load()
+    try:
+        entry = project.resume(cfg)
+    except project.TransitionError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
+    print(f"遷移已繼續（階段 {cfg.phase}；暫停了 {project.describe_pause(entry)}）。下一步照 python3 AIR/air.py status 的指示。")
     return 0
 
 
@@ -306,6 +337,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("review")
     p.add_argument("--base", help="審整個分支：相對這個分支（或 commit）的 merge-base；預設相對 HEAD")
     p.add_argument("--result", help="交回審查結果的 JSON 檔案；- 表示從 stdin 讀")
+    p.add_argument("--bundle", action="store_true", help="把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊，不用再逐檔 git diff")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("install")
     p.add_argument("--package")
@@ -326,6 +358,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--rollback", action="store_true", help="退回較早的階段（要加 --reason）")
     p.add_argument("--force", action="store_true", help="略過前置條件（要加 --reason；會記錄）")
     p.add_argument("--reason", default="")
+    p = sub.add_parser("pause")
+    p.add_argument("--reason", default="", help="為什麼暫停（之後每個 session 開始都會附上；必填）")
+    sub.add_parser("resume")
     p = sub.add_parser("hook")
     p.add_argument("event", choices=list(HOOK_HANDLERS))
     p.add_argument("--host", choices=list(hosts.HOSTS), default=hosts.DEFAULT)
@@ -333,8 +368,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     handlers = {
         "check": cmd_check, "verify": cmd_verify, "review": cmd_review, "install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor,
-        "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "hook": cmd_hook,
-        "manifest": cmd_manifest,
+        "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "pause": cmd_pause, "resume": cmd_resume,
+        "hook": cmd_hook, "manifest": cmd_manifest,
     }
     try:
         return handlers[args.cmd](args)

@@ -41,6 +41,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 階段只能一次前進一格，而且有前置條件（例如進入 `done` 需要一份剛通過、程式碼沒再改過的 `verify --scope final` 紀錄）；AI 不能直接把階段設成 `done`。每次轉移都記在 `.air/history.jsonl`。
 
+遷移要先擱置（例如先趕別的工作）時，執行 `python3 AIR/air.py pause --reason <原因>`：階段保留，分析／計畫階段的程式凍結解除，AI 在 session 開始會看到「暫停中」而不是該階段的待辦，架構檢查照常；`python3 AIR/air.py resume` 繼續。這兩個指令由你執行，AI 不會自己跑。
+
 ## 支援的 AI 工具
 
 規則、檢查與 skill 不分工具；只有接點不同，安裝時全部裝好，同一個專案裡誰用哪個工具都可以：
@@ -57,13 +59,14 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 位置 | 內容 | 進版本控制 |
 |---|---|---|
 | `AIR/` | 這個套件 | 是 |
-| `AGENTS.md` | 標記區塊：`AIR/AGENTS.md` 的全文（常駐規則） | 是 |
+| `AGENTS.md` | 標記區塊：`AIR/AGENTS.md` 的全文（常駐規則，1,500 字內） | 是 |
 | `CLAUDE.md` | 標記區塊：匯入常駐規則（AIR 建立的匯入 `AGENTS.md`；你原有的匯入 `AIR/AGENTS.md`） | 是 |
 | `.claude/settings.json` | Claude Code 的六個 hook（session 開始、讀檔前、編輯前、編輯後、執行 Bash 前、結束前） | 是 |
 | `.claude/skills/air-*/` | 六個 skill（Claude Code） | 是 |
 | `.codex/hooks.json`、`.agents/skills/air-*/` | Codex 的五個 hook 與六個 skill | 是 |
 | `.air/project.toml` | 這個專案的設定：套件位置、測試指令、遷移階段 | 是 |
-| `.air/history.jsonl` | 每次階段轉移的紀錄（時間、commit、方式、原因） | 是 |
+| `.air/history.jsonl` | 每次階段轉移、暫停與繼續的紀錄（時間、commit、方式、原因） | 是 |
+| `.air/paused.json` | 遷移暫停中的紀錄（時間、階段、原因）；`resume` 時移除 | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
 | `.air/sessions/` | hook 的注入紀錄（哪個 session 已附過哪一層的規則） | 否 |
 | `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
@@ -93,8 +96,9 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
 | `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查，結果記在 `.air/verify.json`（會跑整套測試） |
-| `python3 AIR/air.py review` | 語意審查的範圍：每層要對照的規則（只列一次）與這次改到的檔案；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
+| `python3 AIR/air.py review --bundle` | 語意審查的範圍：每層要對照的規則（只列一次）、這次改到的檔案，加上每個待審檔案的差異（一次拿齊）；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
 | `python3 AIR/air.py survey --out docs/air-survey.md` | 盤點現有程式碼：完整表寫進檔案，畫面只印摘要 |
+| `python3 AIR/air.py pause --reason <原因>` | 暫停遷移（階段保留、分析／計畫階段的 `.py` 凍結解除、session 開始改附「暫停中」）；`resume` 繼續 |
 
 ## 更多說明
 
