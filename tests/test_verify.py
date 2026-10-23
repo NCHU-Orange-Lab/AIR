@@ -216,7 +216,7 @@ class TestFingerprint(ProjectTestCase):
         self.assertNotEqual(after_conftest, before)
         self.p.write("conf/base.yml", "a: 2\n")                                 # 目錄裡不是 .py 的檔案也算
         self.assertNotEqual(verify.fingerprint(self.p.cfg())["source"], after_conftest)
-        files = [str(f) for f in verify.source_files(self.p.cfg())]
+        files = [f.as_posix() for f in verify.source_files(self.p.cfg())]  # Windows 的分隔符是反斜線，比對用 posix
         self.assertTrue(any(f.endswith("conf/base.yml") for f in files))
         self.assertFalse(any("experiments" in f for f in files))
         self.assertTrue(any(f.endswith("airkit/checks.py") for f in files))  # AIR 自己的 checker 仍在指紋裡
