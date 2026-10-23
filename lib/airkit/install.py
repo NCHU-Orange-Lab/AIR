@@ -135,7 +135,7 @@ def write_project_file(root: Path, package: str, package_dir: str) -> str:
     return "created"
 
 
-AIR_IGNORE = ["python", "hosts", "branches", "sessions", "hook-errors.log", "metrics.jsonl"]  # 這台電腦的 Python 路徑與裝了哪些宿主、各分支的本機紀錄（驗收、審查、最近一次檢查）、hook 的 session 紀錄與錯誤紀錄、成本指標：都不進版本控制
+AIR_IGNORE = ["python", "hosts", "branches", "sessions", "hook-errors.log", "metrics.jsonl", "*.xml"]  # 這台電腦的 Python 路徑與裝了哪些宿主、各分支的本機紀錄（驗收、審查、最近一次檢查）、hook 的 session 紀錄與錯誤紀錄、成本指標：都不進版本控制
 OLD_RECORDS = ("verify.json", "review.json", "last-check.json")  # 2.7.0 以前放在 .air/ 底下；現在依分支放在 .air/branches/<分支>/
 HOSTS_FILE = Path(".air") / "hosts"
 

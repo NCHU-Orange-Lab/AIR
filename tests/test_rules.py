@@ -96,6 +96,7 @@ class TestCurrentRules(unittest.TestCase):
     def test_levels(self):
         by_id = rules.by_id()
         self.assertEqual((by_id["FLOW-3"].level, by_id["FLOW-4"].level), ("必須", "建議"))
+        self.assertIn("黃金重播", by_id["TEST-5"].text)  # 行為保護測試或黃金重播，兩種都能鎖住行為
 
 
 class TestParse(unittest.TestCase):
