@@ -7,7 +7,7 @@
   python3 AIR/air.py verify --record-baseline [--scope batch|final]
                                              跑測試，把目前失敗的測試記成基準（.air/test-baseline.json，進版本控制；分析階段做一次）
   python3 AIR/air.py golden record [名稱 ...]  跑黃金重播的指令，把輸出檔的 sha256 記進 .air/golden.json（只由使用者決定何時重錄）
-  python3 AIR/air.py batch close [--note 說明]  結束這一批（commit 之後）：把這批的代理指標記進 .air/history.jsonl
+  python3 AIR/air.py batch close [--note 說明] [--ack 理由]  結束這一批（commit 之後）：把這批的代理指標記進 .air/history.jsonl；審查還有沒處理的 P1 時要 --ack
                                              （搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）；要先通過驗收
   python3 AIR/air.py batch list              列出每一批的指標，改版前後可以比較
   python3 AIR/air.py review [--base 分支] [--bundle] [--json]
@@ -109,7 +109,7 @@ def cmd_batch(args) -> int:
         print(batch.format_list(batch.batches(cfg.root)))
         return 0
     try:
-        entry, warnings = batch.close(cfg, args.note)
+        entry, warnings = batch.close(cfg, args.note, args.ack)
     except batch.BatchError as e:
         print(f"錯誤：{e}", file=sys.stderr)
         return 1
@@ -421,6 +421,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("batch")
     p.add_argument("action", choices=["close", "list"])
     p.add_argument("--note", default="", help="這一批做了什麼（例如「第 3 批：搬 storage」）")
+    p.add_argument("--ack", default="", help="審查紀錄裡還有 priority 0／1 的發現卻要結束這一批時，寫明不處理的理由（要先經使用者同意）")
     p = sub.add_parser("review")
     p.add_argument("--base", help="審整個分支：相對這個分支（或 commit）的 merge-base；預設相對 HEAD")
     p.add_argument("--result", help="交回審查結果的 JSON 檔案；- 表示從 stdin 讀")

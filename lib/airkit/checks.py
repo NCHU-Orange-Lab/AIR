@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,11 +52,19 @@ class Violation:
         return {"path": rel(self.path, root), "line": self.line, "col": self.col, "code": self.code, "msg": self.msg}
 
 
+_NAMED = re.compile(r"`[^`]*`")
+
+
+def _group_msg(v: Violation) -> str:
+    """分組用的訊息。AIR008 的訊息帶著被 import 的舊模組名稱，修法卻是同一句：名稱換掉才分得進同一組。"""
+    return _NAMED.sub("`<模組>`", v.msg) if v.code == "AIR008" else v.msg
+
+
 def grouped(violations: list[Violation]) -> list[tuple[str, str, list[Violation]]]:
     """依（代碼、訊息）分組，最多的在前。全專案檢查時同一種違規常出現幾十次，修法只需要印一次。"""
     groups: dict[tuple[str, str], list[Violation]] = {}
     for v in violations:
-        groups.setdefault((v.code, v.msg), []).append(v)
+        groups.setdefault((v.code, _group_msg(v)), []).append(v)
     return [(code, msg, vs) for (code, msg), vs in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
 
 
@@ -69,7 +78,7 @@ def format_grouped(violations: list[Violation], root: Path, limit: int | None = 
             lines.append(vs[0].format(root))
         else:
             lines.append(f"{code} ×{len(vs)}：{msg}")
-            lines.append("  " + "、".join(f"{rel(v.path, root)}:{v.line}:{v.col}" for v in vs))
+            lines.append("  " + "、".join(f"{rel(v.path, root)}:{v.line}:{v.col}" + (f" {m.group(0)}" if code == "AIR008" and (m := _NAMED.search(v.msg)) else "") for v in vs))
     return lines
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import sys
 import os
 import re
 from datetime import datetime
@@ -15,7 +16,9 @@ from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
 
 STDLIB_IO = {"os", "io", "pathlib", "shutil", "sys", "subprocess", "socket", "logging", "random", "time",
-             "urllib", "http", "sqlite3", "pickle", "csv", "tempfile", "glob", "argparse"}
+             "urllib", "http", "sqlite3", "pickle", "csv", "tempfile", "glob", "argparse",
+             "secrets", "uuid", "zipfile", "tarfile", "importlib", "signal", "ssl", "platform", "getpass", "select",
+             "threading", "multiprocessing", "asyncio", "shelve", "dbm", "fileinput", "smtplib", "ftplib", "webbrowser"}
 
 PHASES = ["installed", "analyzed", "planned", "layered", "migrating", "done"]
 HISTORY_FILE = Path(".air") / "history.jsonl"  # 每次階段轉移一行：時間、從哪到哪、commit、方式、原因
@@ -284,7 +287,7 @@ def _module_facts(file: Path, cfg: Config) -> dict:
         **facts,
         "functions": funcs,
         "external": sorted(external),
-        "third_party": sorted(m for m in external if not matches(m, cfg.common_imports) and m not in STDLIB_IO),
+        "third_party": sorted(m for m in external if not matches(m, cfg.common_imports) and m not in STDLIB_IO and m not in sys.stdlib_module_names),
         "stdlib_io": sorted(m for m in external if m in STDLIB_IO),
         "internal": sorted(internal),
         "signals": signals,
