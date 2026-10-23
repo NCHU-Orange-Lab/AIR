@@ -38,9 +38,11 @@ exclude = [{exclude}]
 [tests]
 command = {test_command}
 timeout = {test_timeout}
+{results_line}
 
 [hooks]
 stop-scope = "{stop_scope}"
+{extra_toml}
 """
 
 # 給 test-command 用的指令（用目前的直譯器，不依賴 PATH 上的 python3）。用雙引號：Windows 的 cmd.exe 不把單引號當引號
@@ -52,12 +54,12 @@ class Project:
     """暫存目錄裡的範例專案：AIR/ 的複本、.air/project.toml、套件 demo/。"""
 
     def __init__(self, phase: str = "installed", allow_legacy: str = "", extra: str = "", git: bool = False,
-                 test_command: str = "", test_timeout: int = 600, exclude: str = "", stop_scope: str = "session"):
+                 test_command: str = "", test_timeout: int = 600, exclude: str = "", stop_scope: str = "session", extra_toml: str = "", test_results: str = ""):
         self.root = Path(tempfile.mkdtemp(prefix="air-test-")).resolve()
         shutil.copytree(KIT, self.root / "AIR", ignore=shutil.ignore_patterns(".git", "tests", "__pycache__"))
         self.write(".air/project.toml", PROJECT_TOML.format(
             phase=phase, allow=allow_legacy, extra=extra, test_command=json.dumps(test_command), test_timeout=test_timeout, exclude=exclude,
-            stop_scope=stop_scope))
+            stop_scope=stop_scope, extra_toml=extra_toml, results_line=f'results = "{test_results}"' if test_results else ""))
         (self.root / "demo").mkdir()
         (self.root / "demo" / "__init__.py").write_text("", encoding="utf-8")
         if git:
@@ -149,8 +151,11 @@ class ProjectTestCase(unittest.TestCase):
     test_timeout = 600
     exclude = ""
     stop_scope = "session"
+    extra_toml = ""
+    test_results = ""
 
     def setUp(self) -> None:
         self.p = Project(phase=self.phase, allow_legacy=self.allow_legacy, extra=self.extra, git=self.git,
-                         test_command=self.test_command, test_timeout=self.test_timeout, exclude=self.exclude, stop_scope=self.stop_scope)
+                         test_command=self.test_command, test_timeout=self.test_timeout, exclude=self.exclude, stop_scope=self.stop_scope,
+                         extra_toml=self.extra_toml, test_results=self.test_results)
         self.addCleanup(self.p.cleanup)

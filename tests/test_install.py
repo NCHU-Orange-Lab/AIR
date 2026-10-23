@@ -322,7 +322,7 @@ class TestFullInstall(ProjectTestCase):
         self.assertIn(".claude/rules/：各層規則 created 7", r.stdout)
         self.assertTrue(os.access(self.p.root / ".git" / "hooks" / "pre-commit", os.X_OK))
         ignore = (self.p.root / ".air" / ".gitignore").read_text(encoding="utf-8").split()
-        for name in ("python", "hosts", "branches", "sessions", "hook-errors.log", "metrics.jsonl"):
+        for name in ("python", "hosts", "branches", "sessions", "hook-errors.log", "metrics.jsonl", "*.xml"):
             self.assertIn(name, ignore)
         self.assertNotIn("verify.json", ignore)  # 2.7.1 起本機紀錄都在 branches/ 底下
         r2 = self.p.air("install")

@@ -2,7 +2,11 @@
 
   python3 AIR/air.py check [檔案 ...] [--json]      快速檢查（不給檔案時檢查所有層）
   python3 AIR/air.py verify [--scope batch|final] [--json]
-                                             正式驗收：架構檢查＋測試指令；結果綁定這一版程式碼，寫進 .air/branches/<分支>/verify.json
+                                             正式驗收：架構檢查＋測試指令＋黃金重播；結果綁定這一版程式碼，寫進 .air/branches/<分支>/verify.json
+                                             [tests] 有設 results（JUnit XML）時依既有失敗基準判斷：失敗減基準為空就通過
+  python3 AIR/air.py verify --record-baseline [--scope batch|final]
+                                             跑測試，把目前失敗的測試記成基準（.air/test-baseline.json，進版本控制；分析階段做一次）
+  python3 AIR/air.py golden record [名稱 ...]  跑黃金重播的指令，把輸出檔的 sha256 記進 .air/golden.json（只由使用者決定何時重錄）
   python3 AIR/air.py review [--base 分支] [--bundle] [--json]
                                              語意審查的範圍：這次變更改到的層內檔案、各要對照哪些沒有程式檢查的規則（做法見 skill air-review）
                                              --bundle 把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊
@@ -45,7 +49,7 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import context, doctor, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
+from airkit import context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
 from airkit.checks import EXIT, check, format_grouped, grouped, integrity_violations, rel  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -75,9 +79,32 @@ def cmd_check(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    receipt = verify.verify(load(), args.scope)
+    cfg = load()
+    if args.record_baseline:
+        info = verify.record_baseline(cfg, args.scope)  # 跑不起來會 raise ValueError → 2
+        if args.json:
+            print(json.dumps(info, ensure_ascii=False, indent=2))
+        else:
+            print(f"既有失敗基準已寫入 {info['file']}（{info['suite']} 套件：{info['total']} 個測試，失敗 {len(info['failed'])} 個；exit {info['exit']}，{info['duration_ms']} ms）")
+            for t in info["failed"][:20]:
+                print(f"  - {t}")
+            if len(info["failed"]) > 20:
+                print(f"  …共 {len(info['failed'])} 個")
+            print("之後 verify 只要失敗都在基準裡就算通過；基準裡的測試修好了會列出來，重跑這個指令可以縮小基準。")
+        return 0
+    receipt = verify.verify(cfg, args.scope)
     print(json.dumps(receipt, ensure_ascii=False, indent=2) if args.json else verify.format_receipt(receipt))
     return verify.exit_code(receipt)
+
+
+def cmd_golden(args) -> int:
+    cfg = load()
+    items = golden.record(cfg, args.names or None)  # 失敗會 raise GoldenError（ValueError）→ 2
+    print(f"黃金輸出已記錄到 {golden.GOLDEN_FILE.as_posix()}：{len(items)} 筆")
+    for name, item in items.items():
+        print(f"  {name}：{len(item['outputs'])} 個輸出檔")
+    print("之後 verify 會重跑這些指令比對輸出；行為真的要改才重錄，由使用者決定。")
+    return 0
 
 
 def cmd_review(args) -> int:
@@ -339,7 +366,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("verify")
     p.add_argument("--scope", choices=verify.SCOPES, default="batch")
+    p.add_argument("--record-baseline", action="store_true", help="跑測試並把目前失敗的測試記成既有失敗基準（需要 [tests] results）")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("golden")
+    p.add_argument("action", choices=["record"])
+    p.add_argument("names", nargs="*", help="只記這些（預設全部）")
     p = sub.add_parser("review")
     p.add_argument("--base", help="審整個分支：相對這個分支（或 commit）的 merge-base；預設相對 HEAD")
     p.add_argument("--result", help="交回審查結果的 JSON 檔案；- 表示從 stdin 讀")
@@ -375,7 +406,7 @@ def main(argv: list[str]) -> int:
     handlers = {
         "check": cmd_check, "verify": cmd_verify, "review": cmd_review, "install": cmd_install, "uninstall": cmd_uninstall, "doctor": cmd_doctor,
         "layers": cmd_layers, "survey": cmd_survey, "status": cmd_status, "phase": cmd_phase, "pause": cmd_pause, "resume": cmd_resume,
-        "hook": cmd_hook, "manifest": cmd_manifest,
+        "hook": cmd_hook, "manifest": cmd_manifest, "golden": cmd_golden,
     }
     try:
         return handlers[args.cmd](args)

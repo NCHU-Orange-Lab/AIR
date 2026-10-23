@@ -1,6 +1,8 @@
-"""正式驗收：架構檢查＋專案測試（收尾時再加暫時允許與層外模組的檢查），結果綁定這一版程式碼，寫成可追溯的紀錄。
+"""正式驗收：架構檢查＋專案測試＋黃金重播（收尾時再加暫時允許與層外模組的檢查），結果綁定這一版程式碼，寫成可追溯的紀錄。
 
 `check` 是快速診斷；`verify` 回答「這一份程式碼有沒有通過全部必要的檢查」。
+測試有設 [tests].results（JUnit XML）時，用既有失敗基準判斷：失敗減基準為空就通過，並列出新增的失敗與基準裡已修好的
+（研究型專案本來就有環境性失敗，只認 exit 0 永遠拿不到驗收）；沒設就只看結束碼。收尾可以另設 [tests.final] 跑完整套件。
 紀錄存在 .air/branches/<分支>/verify.json（本機，不進版本控制；依分支分開，切換分支不會互相覆蓋或誤判），
 帶著程式碼、設定與 AIR 版本的指紋：任一項改變，紀錄就過期（stale），階段轉移時不能拿來用。
 
@@ -13,20 +15,18 @@ import hashlib
 import json
 import os
 import re
-import signal
 import subprocess
-import time
 from datetime import datetime
 from pathlib import Path
 
-from . import usage
+from . import golden, junit, runner, usage
 from .checks import Report, check, rel
-from .config import KIT_DIR, PROJECT_FILE, Config
+from .config import KIT_DIR, PROJECT_FILE, Config, Suite
 
 BRANCHES_DIR = Path(".air") / "branches"  # 本機紀錄依分支分開：verify.json、review.json、last-check.json
 SCHEMA = "air.verify.v1"
+BASELINE_SCHEMA = "air.test-baseline.v1"
 SCOPES = ("batch", "final")
-OUTPUT_TAIL = 3000  # 測試輸出只保留結尾這麼多字
 SKIP_DIRS = {"venv", ".venv", "node_modules", "build", "dist", "__pycache__"}
 MARK = {"pass": "通過", "fail": "未通過", "skipped": "略過", "error": "錯誤"}
 
@@ -122,47 +122,85 @@ def same_fingerprint(a: dict, b: dict) -> bool:
     return all(a.get(k) == b.get(k) for k in ("source", "config", "air"))
 
 
-# ── 各項檢查 ──
+# ── 既有失敗基準 ──
 
-def tail(text: str) -> str:
-    return text if len(text) <= OUTPUT_TAIL else "…（前面省略）\n" + text[-OUTPUT_TAIL:]
+def load_baseline(cfg: Config) -> dict | None:
+    return load_json(cfg.root / cfg.test_baseline, BASELINE_SCHEMA)
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """結束整個程序樹（shell 與它啟動的測試），不只 shell 本身。POSIX 用程序群組；Windows 沒有 killpg，
-    只殺 shell 的話測試會繼續跑、communicate() 一直等，所以用 taskkill /T。"""
+def baseline_ids(cfg: Config, suite: str) -> set[str]:
+    """這個套件的既有失敗清單（沒有基準就是空集合：任何失敗都算新的）。"""
+    data = load_baseline(cfg) or {}
+    return set(data.get("suites", {}).get(suite, {}).get("failed", []))
+
+
+def baseline_summary(cfg: Config) -> dict[str, int]:
+    data = load_baseline(cfg) or {}
+    return {name: len(s.get("failed", [])) for name, s in data.get("suites", {}).items()}
+
+
+def _run_suite(cfg: Config, suite: Suite) -> tuple[dict, dict[str, str] | None]:
+    """跑一個套件：回傳 (runner 的結果加 detail, 測試結果；沒設 results 或跑不起來是 None)。results 有設時，先刪掉舊檔，才分得出這次有沒有產生。"""
+    hint = f"可在 .air/project.toml 的 [tests{'.final' if suite.name == 'final' else ''}] 設定 timeout"
+    results_path = cfg.root / suite.results if suite.results else None
+    if results_path is not None and results_path.exists():
+        results_path.unlink()
+    r = runner.run_command(suite.command, cfg.root, suite.timeout, hint)
+    if r["status"] == "error" or results_path is None:
+        return r, None
+    if not results_path.exists():
+        return {**r, "status": "error", "detail": f"測試指令沒有產生 {suite.results}（[tests] results 要指向指令寫出的 JUnit XML，例如 pytest --junit-xml={suite.results}）"}, None
     try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
-        elif hasattr(os, "killpg"):
-            os.killpg(proc.pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    except (ProcessLookupError, OSError):
-        pass
+        return r, junit.parse(results_path)
+    except ValueError as e:
+        return {**r, "status": "error", "detail": f"{suite.results} 讀不出測試結果：{e}"}, None
 
 
-def run_tests(cfg: Config) -> dict:
-    """執行專案的測試指令（shell 字串，在專案根目錄）。沒設定＝skipped；逾時或啟動失敗＝error；非 0＝fail。"""
-    result = {"name": "project-tests", "required": True, "command": cfg.test_command}
-    if not cfg.test_command:
+def run_tests(cfg: Config, scope: str = "batch") -> dict:
+    """執行這個 scope 的測試套件。沒設定＝skipped；逾時或啟動失敗＝error。有 results 時依既有失敗基準判斷，沒有就只看結束碼。"""
+    suite = cfg.suite(scope)
+    result = {"name": "project-tests", "required": True, "suite": suite.name, "command": suite.command}
+    if not suite.command:
         return {**result, "status": "skipped", "detail": "測試指令尚未設定（.air/project.toml 的 [tests] command）"}
-    start = time.monotonic()
-    try:
-        proc = subprocess.Popen(cfg.test_command, shell=True, cwd=cfg.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace", start_new_session=True)
-    except OSError as e:
-        return {**result, "status": "error", "detail": f"無法執行：{e}"}
-    try:
-        output, _ = proc.communicate(timeout=cfg.test_timeout)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
-        output, _ = proc.communicate()
-        return {**result, "status": "error", "output": tail(output or ""),
-                "detail": f"逾時（超過 {cfg.test_timeout} 秒；可在 .air/project.toml 的 [tests] 設定 timeout）"}
-    ms = int((time.monotonic() - start) * 1000)
-    return {**result, "status": "pass" if proc.returncode == 0 else "fail", "exit": proc.returncode, "duration_ms": ms,
-            "detail": f"exit {proc.returncode}（{ms} ms）", "output": tail(output or "")}
+    r, cases = _run_suite(cfg, suite)
+    if r["status"] == "error":
+        return {**result, **r}
+    if cases is None:  # 只看結束碼
+        return {**result, **r, "status": "pass" if r["exit"] == 0 else "fail"}
+    failed = {t for t, st in cases.items() if st == junit.FAILED}
+    if r["exit"] not in (0, 1) or (r["exit"] != 0 and not failed):
+        return {**result, **r, "status": "error", "detail": f"{r['detail']}：不是 0（通過）或 1（有失敗），可能是用法錯誤、中斷或沒有收集到測試"}
+    baseline = baseline_ids(cfg, suite.name)
+    new = sorted(failed - baseline)
+    fixed = sorted(t for t in baseline if cases.get(t) == junit.PASSED)
+    detail = (f"{r['detail']}；{len(cases)} 個測試，失敗 {len(failed)}（基準內 {len(failed & baseline)}，新增 {len(new)}）"
+              + (f"；基準裡已修好 {len(fixed)}，可以重跑 verify --record-baseline 縮小基準" if fixed else ""))
+    return {**result, **r, "status": "pass" if not new else "fail", "detail": detail,
+            "failed": sorted(failed), "new_failures": new, "fixed": fixed, "baseline": len(baseline)}
+
+
+def record_baseline(cfg: Config, scope: str = "batch") -> dict:
+    """跑這個 scope 的套件，把目前失敗的測試記成基準（.air/test-baseline.json，進版本控制；保留別的套件的基準）。
+    分析階段做一次：之後只要沒有新的失敗就算通過。需要 [tests] results。"""
+    suite = cfg.suite(scope)
+    if not suite.command:
+        raise ValueError("測試指令尚未設定（.air/project.toml 的 [tests] command）。")
+    if not suite.results:
+        raise ValueError("要記基準，[tests] 要設 results（指令寫出的 JUnit XML，例如 pytest --junit-xml=.air/test-results.xml）。")
+    r, cases = _run_suite(cfg, suite)
+    if cases is None:
+        raise ValueError(f"測試跑不起來，沒有記基準：{r['detail']}")
+    if r["exit"] not in (0, 1):
+        raise ValueError(f"測試 {r['detail']}，不是 0 或 1，沒有記基準（可能是用法錯誤、中斷或沒有收集到測試）。")
+    failed = sorted(t for t, st in cases.items() if st == junit.FAILED)
+    data = load_baseline(cfg) or {"schema": BASELINE_SCHEMA, "suites": {}}
+    data["suites"][suite.name] = {"failed": failed, "time": now(), "head": git(cfg.root, "rev-parse", "HEAD"), "command": suite.command}
+    data["time"] = now()
+    write_json(cfg.root / cfg.test_baseline, data)
+    return {"suite": suite.name, "failed": failed, "total": len(cases), "file": cfg.test_baseline, **{k: r[k] for k in ("exit", "duration_ms")}}
+
+
+# ── 各項檢查 ──
 
 
 def architecture(report: Report, root: Path, scope: str) -> dict:
@@ -195,7 +233,7 @@ def verify(cfg: Config, scope: str = "batch") -> dict:
         raise ValueError(f"未知的 scope：{scope}（可用：{'、'.join(SCOPES)}）")
     before = fingerprint(cfg)
     report = check(cfg)
-    checks = [architecture(report, cfg.root, scope), run_tests(cfg)]
+    checks = [architecture(report, cfg.root, scope), run_tests(cfg, scope), *golden.checks(cfg, scope)]
     if scope == "final":
         checks += [allowances(cfg), legacy_remaining(report, cfg.root)]
     reasons = [f"{c['name']}：{c['detail']}" for c in checks if c["required"] and c["status"] != "pass"]
@@ -269,7 +307,11 @@ def format_receipt(receipt: dict) -> str:
         note = "" if c["required"] else "（參考，不影響結果）"
         lines.append(f"  [{MARK[c['status']]}] {c['name']}{note}：{c['detail']}")
         lines += [f"      {v}" for v in c.get("violations", [])[:10]]
-        if c["name"] == "project-tests" and c["status"] in ("fail", "error") and c.get("output"):
+        if c.get("new_failures"):
+            lines.append("      新增的失敗：" + "、".join(c["new_failures"][:10]) + (f"…共 {len(c['new_failures'])} 個" if len(c["new_failures"]) > 10 else ""))
+        if c.get("fixed"):
+            lines.append("      基準裡已修好：" + "、".join(c["fixed"][:10]))
+        if c["status"] in ("fail", "error") and c.get("output") and not c.get("new_failures"):
             lines += [f"      {line}" for line in c["output"].rstrip().splitlines()[-15:]]
     fp = receipt["fingerprint"]
     head = (fp["head"] or "沒有 commit")[:12] + ("（工作樹有未提交的修改）" if fp["dirty"] else "")

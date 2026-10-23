@@ -36,7 +36,7 @@
 1. 執行 `python3 AIR/air.py survey --out docs/air-survey.md`：完整的盤點表寫進檔案，畫面只印摘要（模組數、第三方套件、訊號最多的模組）。分析時只查需要的列，不要把整份表讀進對話。
 2. **決定不歸 AIR 管的路徑**：實驗區、腳本、筆記本等不打算遷移的，列出來問使用者，同意後寫進 `.air/project.toml` 的 `migration.exclude`（目錄或檔案，可寫 `dir/**`）。它們不凍結、不進驗收指紋、不列進盤點，留在外面算正式的結局；改完重跑 survey。
 3. **確認測試指令**：找出專案怎麼跑測試（pyproject、tox、Makefile、CI 設定）。不確定就問使用者。確認後寫進 `.air/project.toml` 的 `[tests]` `command`。
-4. **跑一次測試**，記錄結果。測試本來就失敗的話，記下來並告訴使用者；**不要在這個階段修測試**。
+4. **跑一次測試並記下既有失敗**：`python3 AIR/air.py verify --record-baseline`。`[tests]` 有設 `results`（指令寫出的 JUnit XML，例如 `pytest --junit-xml=.air/test-results.xml`）時，它把本來就失敗的測試記進 `.air/test-baseline.json`，之後只要沒有新的失敗就算通過；沒設就只認結束碼。本來就失敗的測試告訴使用者，**不要在這個階段修測試**。沒有測試的部分，跟使用者商量用黃金重播：在 `[[tests.golden]]` 寫固定輸入的指令與輸出檔，`python3 AIR/air.py golden record` 記下輸出的雜湊。
 5. 複製 `AIR/templates/遷移報告.md` 到 `docs/AIR-遷移報告.md`，填寫「現況」與「分析」兩節：
    - 每個模組建議歸到哪一層，以及理由（依 survey 的訊號：有 I/O 的歸 storage、用第三方工具的歸 adapters、純計算的歸 steps、負責串接的歸 flows、進入點歸 main）
    - 自己寫的模型、資料管線、訓練迴圈也歸 adapters：一個工具一個子套件，依角色切檔（`data.py`、`model.py`、`trainer.py`、`predictor.py`…，見 skill `air-wrap-tool`）；只有前後處理與 numpy 版的指標是 steps
@@ -56,7 +56,7 @@
    3. steps：把純計算抽出來
    4. flows：把串接邏輯整理成流程
    5. main：進入點改成只做組裝
-2. 每個批次寫清楚：要搬或拆的模組、要補的行為保護測試、預計需要的暫時允許（allow-legacy）、驗收方式。
+2. 每個批次寫清楚：要搬或拆的模組、要補的行為保護測試（或哪些由黃金重播涵蓋）、預計需要的暫時允許（allow-legacy）、驗收方式。
 3. 每批控制在使用者能一次審閱完的大小，一批一個 commit。
 4. `python3 AIR/air.py phase planned`
 
@@ -80,11 +80,11 @@
 
 每一批都照這個順序：
 
-1. **補行為保護測試**：為這一批要搬的行為補上測試，鎖住現有的結果。先跑一次，確認在搬移前就通過。
+1. **補行為保護測試**：為這一批要搬的行為補上測試，鎖住現有的結果；黃金重播已經涵蓋的部分可以不另外寫。先跑一次，確認在搬移前就通過。
 2. **搬移或拆分**：把程式搬進對應的層，必要時拆開（例如把讀檔和計算分開）。
    - 讓舊的 import 路徑繼續可用：在原本的舊模組裡保留轉接（`from shop.steps.orders import valid_orders`），呼叫端就不用一次全改。轉接在收尾時移除。
    - 新的層 import 了還沒搬的舊模組時，檢查會回報 AIR008。只有在這一批真的沒辦法先搬時，才**經使用者同意**加進 `migration.allow-legacy`，並寫上原因。
-3. **驗證**：`python3 AIR/air.py verify` 必須通過。它會執行專案的測試指令與架構檢查，並把結果綁定這一版程式碼記在 `.air/branches/<分支>/verify.json`；只跑 `check` 不算驗證。
+3. **驗證**：`python3 AIR/air.py verify` 必須通過。它會執行專案的測試指令（失敗都在既有失敗基準裡就算通過）、黃金重播與架構檢查，並把結果綁定這一版程式碼記在 `.air/branches/<分支>/verify.json`；只跑 `check` 不算驗證。重播的輸出變了就是行為變了：找原因，不要重錄。
 4. **語意審查**：照 skill `air-review`（`python3 AIR/air.py review --bundle` 列出這批改到的檔案要對照哪些沒有程式檢查的規則，連差異一起印；審完把結果交回）。priority 0、1 的發現要處理，或向使用者說明為什麼不處理；處理後只有改過的檔案要重審。
 5. 更新遷移報告的「進度」一節。
 6. commit：`AIR 遷移第 N 批：<內容>`
@@ -100,7 +100,7 @@
 1. 移除階段 5 留下的轉接，把呼叫端改成直接 import 新的層。
 2. 清空 `migration.allow-legacy`。
 3. 檢查剩下的舊程式碼：應該搬的都搬完了；剩下的（例如設定、腳本）在報告裡寫明為什麼留在外面。`migration.exclude` 的路徑算正式留在外面，原因也寫進報告。
-4. `python3 AIR/air.py verify --scope final` 必須通過：除了測試與架構檢查，還會確認 `allow-legacy` 已清空，並列出還在層外的模組（對照第 3 步的說明）。再照 skill `air-review` 把整個遷移的變更審一次（`python3 AIR/air.py review --bundle --base <遷移開始前的 commit 或分支>`）。
+4. `python3 AIR/air.py verify --scope final` 必須通過：跑完整套件（有設 `[tests.final]` 就用它）、黃金重播與架構檢查，還會確認 `allow-legacy` 已清空，並列出還在層外的模組（對照第 3 步的說明）。再照 skill `air-review` 把整個遷移的變更審一次（`python3 AIR/air.py review --bundle --base <遷移開始前的 commit 或分支>`）。
 5. 在遷移報告寫下總結，然後 `python3 AIR/air.py phase done`（需要第 4 步的驗收紀錄，而且之後沒有再改程式或設定；改了就重跑第 4 步），commit：`AIR 遷移完成`。
 
 **停下來**，向使用者報告遷移完成。

@@ -31,10 +31,10 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 階段 | AI 會做什麼 | 你要做什麼 |
 |---|---|---|
 | 1. 安裝 | 確認套件位置、執行 `AIR/install.sh` | 確認安裝結果，同意 commit |
-| 2. 分析 | 盤點所有模組、確認測試指令、寫出每個模組該歸到哪一層 | 審閱 `docs/AIR-遷移報告.md` 的分析 |
+| 2. 分析 | 盤點所有模組、決定不歸 AIR 管的路徑、確認測試指令並記下既有失敗、寫出每個模組該歸到哪一層 | 審閱 `docs/AIR-遷移報告.md` 的分析 |
 | 3. 計畫 | 把遷移切成數個批次 | 核准計畫 |
 | 4. 建立分層 | 建立空的各層目錄與規則 | 核准 |
-| 5. 逐批遷移 | 每一批：先補行為保護測試 → 搬移 → `verify`（測試＋架構檢查）通過 → 語意審查（`air-review`）→ commit | 每批結束時核准下一批 |
+| 5. 逐批遷移 | 每一批：先補行為保護測試（或黃金重播已涵蓋）→ 搬移 → `verify`（測試＋架構檢查＋重播）通過 → 語意審查（`air-review`）→ commit | 每批結束時核准下一批 |
 | 6. 收尾 | 移除過渡用的轉接，`verify --scope final` 通過 | 確認完成 |
 
 遷移期間，還沒搬進任何層的程式屬於「舊程式碼」，不受檢查，專案可以照常運作。不打算遷移的實驗區、腳本、筆記本，經你同意寫進 `.air/project.toml` 的 `migration.exclude`：它們不凍結、不進驗收指紋、不列進盤點，留在外面算正式的結局。分析、計畫階段的程式凍結只涵蓋套件目錄與測試目錄。
@@ -68,6 +68,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.air/project.toml` | 這個專案的設定：套件位置、測試指令（`[tests]`）、遷移階段、不歸 AIR 管的路徑（`migration.exclude`） | 是 |
 | `.air/history.jsonl` | 每次階段轉移、暫停與繼續的紀錄（時間、commit、方式、原因） | 是 |
 | `.air/paused.json` | 遷移暫停中的紀錄（時間、階段、原因）；`resume` 時移除 | 是 |
+| `.air/test-baseline.json` | 既有失敗基準：遷移前本來就失敗的測試清單（`verify --record-baseline` 產生） | 是 |
+| `.air/golden.json` | 黃金重播記下的輸出雜湊（`golden record` 產生） | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
 | `.air/sessions/` | 每個 session 的紀錄：已附過哪一層的規則（Codex）、編輯工具動過的檔案、開始時各層檔案的快照（結束前的檢查用） | 否 |
 | `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
@@ -94,7 +96,9 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `python3 AIR/air.py status` | 本機時間、套件、遷移階段、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查 |
 | `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
-| `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試） |
+| `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查＋黃金重播，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試）。`[tests]` 有設 `results` 時，失敗都在既有失敗基準裡就算通過 |
+| `python3 AIR/air.py verify --record-baseline` | 跑測試，把目前失敗的測試記成基準（`.air/test-baseline.json`）；分析階段做一次 |
+| `python3 AIR/air.py golden record` | 跑黃金重播的指令，記下輸出檔的 sha256（`.air/golden.json`）；行為真的要改才重錄，由你決定 |
 | `python3 AIR/air.py review --bundle` | 語意審查的範圍：每層要對照的規則（只列一次）、這次改到的檔案，加上每個待審檔案的差異（一次拿齊）；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
 | `python3 AIR/air.py survey --out docs/air-survey.md` | 盤點現有程式碼：完整表寫進檔案，畫面只印摘要 |
 | `python3 AIR/air.py pause --reason <原因>` | 暫停遷移（階段保留、分析／計畫階段的 `.py` 凍結解除、session 開始改附「暫停中」）；`resume` 繼續 |

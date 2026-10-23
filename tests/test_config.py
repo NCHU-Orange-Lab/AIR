@@ -45,6 +45,29 @@ class TestBuild(unittest.TestCase):
         self.assertFalse(c.is_excluded(self.root / "demo" / "steps" / "x.py"))
         self.assertFalse(c.is_excluded(Path("/elsewhere/notes.py")))
 
+    def test_tests_results_baseline_final_and_golden(self):
+        c = self.build({"tests": {"command": "pytest", "results": ".air/test-results.xml",
+                                  "final": {"command": "pytest -q", "timeout": 50, "results": ".air/final.xml"},
+                                  "golden": [{"name": "smoke", "command": "python x.py", "outputs": ["out/a.json", "out/b.csv"]},
+                                             {"name": "nightly", "command": "python y.py", "outputs": ["out/c.json"], "timeout": 9, "scope": ["final"]}]}})
+        self.assertEqual((c.test_results, c.test_baseline), (".air/test-results.xml", ".air/test-baseline.json"))
+        self.assertEqual(c.suite("batch"), config.Suite("batch", "pytest", 600, ".air/test-results.xml"))
+        self.assertEqual(c.suite("final"), config.Suite("final", "pytest -q", 50, ".air/final.xml"))
+        self.assertEqual([(g.name, g.outputs, g.timeout, g.scope) for g in c.golden],
+                         [("smoke", ("out/a.json", "out/b.csv"), 600, ("batch", "final")), ("nightly", ("out/c.json",), 9, ("final",))])
+        plain = self.build({"tests": {"command": "pytest", "baseline": "tests/baseline.json"}})
+        self.assertEqual((plain.test_results, plain.test_baseline, plain.final, plain.golden), ("", "tests/baseline.json", None, ()))
+        self.assertEqual(plain.suite("final").name, "batch")  # 沒設 final 就用 [tests]
+
+    def test_bad_tests_tables_are_config_errors(self):
+        for bad in ({"final": {"timeout": 3}}, {"results": "/abs.xml"}, {"results": ""},
+                    {"golden": [{"command": "x", "outputs": ["o"]}]}, {"golden": [{"name": "a", "outputs": ["o"]}]},
+                    {"golden": [{"name": "a", "command": "x"}]}, {"golden": [{"name": "a", "command": "x", "outputs": ["o"]}, {"name": "a", "command": "y", "outputs": ["o"]}]},
+                    {"golden": [{"name": "a", "command": "x", "outputs": ["o"], "scope": ["weekly"]}]}, {"golden": "nope"}, "nope"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(config.ConfigError):
+                    self.build({"tests": bad})
+
     def test_bad_paths_and_bad_stop_scope_are_config_errors(self):
         for bad in (["/abs"], ["../up"], ["demo/*.py"], ["demo/[ab]"], ["C:/x"], "notalist", [1]):
             with self.subTest(bad=bad):

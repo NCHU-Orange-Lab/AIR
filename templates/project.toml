@@ -32,9 +32,28 @@ exclude = [
 ]
 
 [tests]
-# 每批 verify 跑的測試指令（shell 字串，在專案根目錄執行），分析階段由 AI 確認後填入，例如 "pytest -q"
+# 每批 verify 跑的測試指令（shell 字串，在專案根目錄執行），分析階段由 AI 確認後填入，例如 "pytest -q --junit-xml=.air/test-results.xml"
 command = ""
 timeout = 600                   # 上限（秒）
+# results：指令寫出的 JUnit XML。有它 verify 才分得出「本來就失敗的」與「新增的失敗」：分析階段 verify --record-baseline 記下既有失敗
+# （.air/test-baseline.json，進版本控制），之後失敗都在基準裡就算通過。沒設就只認結束碼 0
+# results = ".air/test-results.xml"
+# baseline = ".air/test-baseline.json"
+
+# [tests.final]
+# 收尾（verify --scope final）跑的完整套件；沒設就用 [tests]。每批只跑快的，收尾才跑全部（對齊 TEST-3 的慢速標記）
+# command = "pytest -q --junit-xml=.air/final.xml"
+# timeout = 3600
+# results = ".air/final.xml"
+
+# [[tests.golden]]
+# 黃金重播：固定輸入跑一次，python3 AIR/air.py golden record 記下 outputs 的 sha256（.air/golden.json，進版本控制），
+# 之後 verify 重跑比對。沒有測試的部分用它鎖住行為（TEST-5）。輸出要是確定的：seed 固定、不含時間戳。重錄只由使用者決定
+# name = "smoke"
+# command = "python -m {package} --config conf/smoke.yml"
+# outputs = ["reports/smoke/metrics.json"]
+# timeout = 900
+# scope = ["batch", "final"]
 
 # [verify]
 # 驗收指紋除了套件目錄、測試目錄、這個檔案與 AIR 之外，還要看的路徑（改了就讓驗收過期）
