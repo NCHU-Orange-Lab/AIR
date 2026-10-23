@@ -19,7 +19,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from . import buildcheck, golden, junit, runner, usage
+from . import buildcheck, golden, junit, legacy, runner, usage
 from .checks import Report, check, rel
 from .config import KIT_DIR, PROJECT_FILE, Config, Suite
 
@@ -233,9 +233,20 @@ def allowances(cfg: Config) -> dict:
 
 
 def legacy_remaining(report: Report, root: Path) -> dict:
-    names = [rel(p, root) for p in report.legacy]
-    detail = f"還有 {len(names)} 個模組在層外（留在外面的要在遷移報告寫明原因）" if names else "沒有層外的模組"
-    return {"name": "legacy-remaining", "required": False, "status": "fail" if names else "pass", "items": names, "detail": detail}
+    """收尾（final）時層外不能留有邏輯的模組或轉接檔，除非在 migration.exclude；只剩套件標記（空的 __init__.py）才算乾淨。
+
+    試跑（csvkit）：17 個有邏輯的模組還在層外，phase done 照樣通過，階段 6 第 1 步（移除轉接檔）也沒有任何檢查。
+    刻意保留的（給外掛用的舊 import 路徑、不打算遷移的腳本）要明確寫進 exclude 並在報告寫明原因，不是靠自覺。"""
+    groups = legacy.split(report.legacy)
+    left = {k: groups[k] for k in (legacy.LOGIC, legacy.SHIM) if groups[k]}
+    items = [f"{rel(p, root)}（{legacy.LABELS[k]}）" for k, paths in left.items() for p in paths]
+    if not left:
+        n = len(groups[legacy.MARKER])
+        detail = f"層外只剩 {n} 個套件標記用的 __init__.py" if n else "沒有層外的模組"
+        return {"name": "legacy-remaining", "required": True, "status": "pass", "items": [], "detail": detail}
+    detail = (f"層外還有 {legacy.describe({k: len(groups[k]) for k in legacy.KINDS})}：搬進層，或移除轉接檔（呼叫端改成直接 import 新的層）；"
+              "刻意保留的要經使用者同意加進 .air/project.toml 的 migration.exclude，並在遷移報告寫明原因")
+    return {"name": "legacy-remaining", "required": True, "status": "fail", "items": items, "detail": detail}
 
 
 # ── 驗收與紀錄 ──

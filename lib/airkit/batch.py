@@ -7,14 +7,12 @@ post-edit 與 Stop 擋了幾次、審查交回幾次，再加上剩餘的舊模�
 
 from __future__ import annotations
 
-import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import project, review, usage, verify
+from . import legacy, project, review, usage, verify
 from .checks import check, layer_of, rel
 from .config import KIT_DIR, Config
-from .pyast import is_reexport_shell
 
 HOW = "batch"  # history.jsonl 的 how
 TRANSITIONS = ("normal", "forced", "rollback")  # 真正的階段轉移；pause／resume 的紀錄 to 也是 migrating，不算起點
@@ -22,19 +20,6 @@ TRANSITIONS = ("normal", "forced", "rollback")  # 真正的階段轉移；pause�
 
 class BatchError(ValueError):
     """不能結束這一批（階段不對、驗收沒通過或已過期、審查還有沒處理的 priority 0／1 又沒有確認）。"""
-
-
-def legacy_split(paths: list[Path]) -> tuple[int, int]:
-    """(還有自己邏輯的舊模組數, 轉接檔／空殼數)：搬完之後原模組常留成只 re-export 的轉接檔，不該讓進度停在原地。"""
-    real = shells = 0
-    for p in paths:
-        try:
-            shell = is_reexport_shell(ast.parse(p.read_text(encoding="utf-8")))
-        except (OSError, SyntaxError, ValueError):
-            shell = False  # 讀不了就保守地當成還有程式
-        shells += shell
-        real += not shell
-    return real, shells
 
 
 def _when(value: str | None) -> datetime | None:
@@ -139,14 +124,14 @@ def close(cfg: Config, note: str = "", ack: str = "") -> tuple[dict, list[str]]:
     elif state == "stale":
         warnings.append("語意審查紀錄已過期：" + review.describe(cfg, rec))
     since_time, since_head = window_start(cfg.root)
-    legacy_real, legacy_shells = legacy_split(check(cfg).legacy)
+    left = legacy.counts(check(cfg).legacy)
     entry = {
         "time": verify.now(), "from": cfg.phase, "to": cfg.phase, "head": verify.git(cfg.root, "rev-parse", "HEAD"), "how": HOW,
         "n": len(batches(cfg.root)) + 1, "note": note.strip() or None, "air": (KIT_DIR / "VERSION").read_text(encoding="utf-8").strip(),
         "since": {"time": since_time, "head": since_head},
         "metrics": metrics_between(cfg.root, since_time),
         "git": git_stats(cfg, since_head),
-        "legacy_remaining": legacy_real, "legacy_shims": legacy_shells,
+        "legacy_remaining": left[legacy.LOGIC], "legacy_shims": left[legacy.SHIM], "legacy_markers": left[legacy.MARKER],
         "review": state, "review_blocking": len(open_p) if rec else None, "ack": acked,
     }
     project.record(cfg.root, entry)

@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import batch, budget, golden, hooklog, install, review, usage, verify
+from . import batch, budget, golden, hooklog, install, legacy, review, usage, verify
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source, rel
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
@@ -389,6 +389,7 @@ def status_data(cfg: Config) -> dict:
         "layers": [la.name for la in cfg.layers.values() if la.path.is_dir()],
         "checked_files": len(report.checked),
         "legacy_modules": len(report.legacy),
+        "legacy_kinds": legacy.counts(report.legacy),  # logic（有自己的程式）／shim（轉接檔）／marker（套件標記）
         "allow_legacy": len(cfg.allow_legacy),
         "violations": len(report.hard),
         "warnings": len(report.soft),
@@ -430,7 +431,7 @@ def status(cfg: Config) -> str:
         *([f"遷移暫停中：{d['paused_text']}（python3 AIR/air.py resume 繼續；暫停期間照一般開發，架構檢查照常）"] if d["paused"] else []),
         f"分支：{d['branch']}（本機紀錄在 {d['records_dir']}/）",
         f"已建立的層：{'、'.join(d['layers']) or '無'}",
-        f"檢查範圍：層內 {d['checked_files']} 個檔案；舊程式碼模組 {d['legacy_modules']} 個（不檢查）",
+        f"檢查範圍：層內 {d['checked_files']} 個檔案；舊程式碼模組 {d['legacy_modules']} 個（不檢查；{legacy.describe(d['legacy_kinds'])}）",
         *([f"不歸 AIR 管的路徑（migration.exclude）：{'、'.join(d['exclude'])}"] if d["exclude"] else []),
         f"暫時允許的舊模組 import：{d['allow_legacy']}",
         f"違規：{d['violations']}　提醒：{d['warnings']}",
