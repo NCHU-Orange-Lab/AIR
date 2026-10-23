@@ -1,6 +1,6 @@
 # AIR 規範（常駐）
 
-這個專案採用 AIR 規範。這份文件只放地圖和 3 條常駐規則；各層的詳細規則在 `AIR/rules/<層>.md`，**需要時才讀**。
+這個專案採用 AIR 規範。這份文件只放地圖和 3 條常駐規則；各層的規則在 `AIR/rules/<層>.md`，**需要時才讀**。
 
 ## 架構
 
@@ -19,7 +19,7 @@
 
 ## 依位置讀規則
 
-改到哪一層就照 `AIR/rules/<層>.md`（測試是 `tests.md`），沒改到的層不用讀。有 hook 的工具第一次讀寫某一層時會自動附上，同一個 session 不再重複；沒有 hook 的工具請自行讀取。
+改到哪一層就照 `AIR/rules/<層>.md`（測試是 `tests.md`），沒改到的層不用讀。Claude Code 讀寫該層時會自動載入（`.claude/rules`），Codex 第一次修改時由 hook 附上；其他工具請自行讀取。
 
 ## 永遠適用（只有這三條）
 
@@ -33,4 +33,4 @@
 
 ## 指令
 
-`python3 AIR/air.py check`（快速檢查，只檢查層內）、`verify`（驗收：測試＋架構檢查，每批結束必須通過）、`review`（語意審查的範圍，做法見 skill `air-review`）、`status`、`doctor`。不要用 `--no-verify`、`-n`、`SKIP=` 或改 `core.hooksPath` 略過 commit 前的檢查（會被擋下）。
+`python3 AIR/air.py check`（快速檢查層內）、`verify`（驗收：測試＋架構檢查，每批結束必須通過）、`review`（語意審查的範圍，做法見 skill `air-review`）、`status`、`doctor`。不要用 `--no-verify`、`-n`、`SKIP=` 或改 `core.hooksPath` 略過 commit 前的檢查。

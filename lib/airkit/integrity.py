@@ -1,4 +1,4 @@
-"""套件與接點的完整性（AIR009）：AIR/MANIFEST.sha256 與 hook、指引的接點。
+"""套件與接點的完整性（AIR009）：AIR/MANIFEST.sha256 與 hook、路徑規則、指引的接點。
 
 pre-edit hook 攔得到編輯工具；用 Bash 或其他程式改了 AIR/、拿掉 hook，就靠這裡在全專案檢查（結束前、commit 前）抓到。
 MANIFEST 由 AIR 的開發 repo 產生（python3 AIR/air.py manifest），列出套件裡每個檔案的 SHA-256（tests/ 與 .github/ 除外）。
@@ -71,7 +71,8 @@ def manifest_problems(kit: Path = KIT_DIR) -> list[tuple[Path, str]]:
 def wiring_problems(root: Path) -> list[tuple[Path, str]]:
     """接點是否還在。只在這台電腦跑過 install.sh（有 .air/hosts）時檢查，CI 的乾淨 checkout 不會誤報。
 
-    install.sh 裝了哪些宿主就查哪些：設定檔要在、AIR 的 hook 要齊全。沒裝的宿主（例如只用 Claude Code）不算問題。
+    install.sh 裝了哪些宿主就查哪些：設定檔要在、AIR 的 hook 要齊全、有路徑規則的宿主每一層的規則檔都要在。
+    沒裝的宿主（例如只用 Claude Code）不算問題。
     """
     installed = install.installed_hosts(root)
     if installed is None:
@@ -89,6 +90,10 @@ def wiring_problems(root: Path) -> list[tuple[Path, str]]:
         missing = install.missing_hooks(data, host)
         if missing:
             problems.append((path, f"缺少 AIR 的 hook：{'、'.join(missing)}"))
+        if host.rules_dir:
+            gone = [f.name for f in (install.path_rule_file(root, host, n) for n in install.rule_names()) if not install.is_managed_path_rule(f)]
+            if gone:
+                problems.append((root / host.rules_dir, f"缺少 AIR 的規則檔（各層規則由 {host.label} 從這裡載入）：{'、'.join(gone)}"))
     for path in (install.claude_md_path(root), root / "AGENTS.md"):
         if not path.exists() or install.BEGIN not in path.read_text(encoding="utf-8"):
             problems.append((path, "缺少 AIR 的指引區塊"))

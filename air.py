@@ -19,7 +19,7 @@
                                              推進遷移階段（一次一格，會檢查前置條件；退回或強制要寫原因）
   python3 AIR/air.py pause --reason 原因      暫停遷移（只由使用者要求時執行）：階段保留，分析／計畫階段的 .py 凍結解除，
                                              session 開始改附「暫停中」；架構檢查照常。python3 AIR/air.py resume 繼續
-  python3 AIR/air.py hook <session-start|pre-read|pre-edit|pre-bash|post-edit|stop> [--host claude|codex]
+  python3 AIR/air.py hook <session-start|pre-edit|pre-bash|post-edit|stop> [--host claude|codex]
                                              給 hook 使用（從 stdin 讀 JSON；宿主的差異見 lib/airkit/hosts.py）
   python3 AIR/air.py manifest                重新產生 AIR/MANIFEST.sha256（維護 AIR 時在開發 repo 用；裝好的專案裡不能用）
 
@@ -221,22 +221,15 @@ def hook_output(event_name: str, **fields) -> None:
 
 
 def hook_session_start(event: hosts.Event, cfg: Config) -> int:
-    """session 開始、壓縮或恢復後：清掉這個 session 的注入紀錄（下次碰到某層會重新附規則），附上目前狀態。"""
+    """session 開始、壓縮或恢復後：清掉這個 session 的注入紀錄（Codex 下次碰到某層會重新附規則），附上目前狀態。"""
     context.reset(cfg.root, event.session_id)
-    hook_output("SessionStart", additionalContext=context.session_context(cfg))
-    return 0
-
-
-def hook_pre_read(event: hosts.Event, cfg: Config) -> int:
-    """讀檔前：第一次讀某一層的檔案，附上那一層的規則。"""
-    rules = context.rules_to_inject(cfg, event.session_id, event.files)
-    if rules:
-        hook_output("PreToolUse", additionalContext=rules)
+    hook_output("SessionStart", additionalContext=context.session_context(cfg, event.host))
     return 0
 
 
 def hook_pre_edit(event: hosts.Event, cfg: Config) -> int:
-    """編輯前：受保護路徑擋下（exit 2，檔案還沒被改到）；.air/project.toml 改成請使用者確認；第一次改某一層附上規則。"""
+    """編輯前：受保護路徑擋下（exit 2，檔案還沒被改到）；.air/project.toml 改成請使用者確認；
+    沒有路徑規則的宿主（Codex）第一次改某一層時附上規則（Claude Code 由 .claude/rules 自己載入，不重複附）。"""
     if not event.files:
         return 0
     decisions = [(p, protect.classify(p, cfg)) for p in event.files]
@@ -255,7 +248,7 @@ def hook_pre_edit(event: hosts.Event, cfg: Config) -> int:
         else:  # Codex 的 PreToolUse 不支援 ask（會被當成無效輸出）：改成提醒，同意與否仍由使用者的訊息決定
             fields["additionalContext"] = (f"【AIR：需要使用者同意】{reason} {event.host.label} 沒有確認機制："
                                            "使用者還沒同意的話，先停下來問；同意的原話記進遷移報告的「調整紀錄」。")
-    rules = context.rules_to_inject(cfg, event.session_id, event.files)
+    rules = "" if event.host.rules_dir else context.rules_to_inject(cfg, event.session_id, event.files)
     if rules:
         fields["additionalContext"] = "\n\n".join(filter(None, [fields.get("additionalContext"), rules]))
     if fields:
@@ -308,7 +301,7 @@ def hook_stop(event: hosts.Event, cfg: Config) -> int:
 
 
 HOOK_HANDLERS = {
-    "session-start": hook_session_start, "pre-read": hook_pre_read, "pre-edit": hook_pre_edit,
+    "session-start": hook_session_start, "pre-edit": hook_pre_edit,
     "pre-bash": hook_pre_bash, "post-edit": hook_post_edit, "stop": hook_stop,
 }
 

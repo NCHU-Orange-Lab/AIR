@@ -49,8 +49,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 工具 | hook 設定 | skills | 差異 |
 |---|---|---|---|
-| Claude Code（Grok Build 讀同一份設定） | `.claude/settings.json` | `.claude/skills/` | 六個 hook；修改 `.air/project.toml` 會跳出確認 |
-| Codex | `.codex/hooks.json` | `.agents/skills/` | 五個 hook（沒有讀檔前的那個）；不支援確認，改成提醒；**hook 要在 Codex 裡信任過才會執行** |
+| Claude Code（Grok Build 讀同一份設定） | `.claude/settings.json` | `.claude/skills/` | 五個 hook；各層規則放在 `.claude/rules/air-<層>.md`，讀寫該層時由 Claude Code 自己載入（不啟動 Python）；修改 `.air/project.toml` 會跳出確認 |
+| Codex | `.codex/hooks.json` | `.agents/skills/` | 五個 hook；各層規則在第一次修改該層時由 hook 附上；不支援確認，改成提醒；**hook 要在 Codex 裡信任過才會執行** |
 
 只用其中一種：`sh AIR/install.sh --host claude`（或 `--host codex`）。`python3 AIR/air.py doctor` 列出每個工具的接線狀態。
 
@@ -61,7 +61,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `AIR/` | 這個套件 | 是 |
 | `AGENTS.md` | 標記區塊：`AIR/AGENTS.md` 的全文（常駐規則，1,500 字內） | 是 |
 | `CLAUDE.md` | 標記區塊：匯入常駐規則（AIR 建立的匯入 `AGENTS.md`；你原有的匯入 `AIR/AGENTS.md`） | 是 |
-| `.claude/settings.json` | Claude Code 的六個 hook（session 開始、讀檔前、編輯前、編輯後、執行 Bash 前、結束前） | 是 |
+| `.claude/settings.json` | Claude Code 的五個 hook（session 開始、編輯前、編輯後、執行 Bash 前、結束前） | 是 |
+| `.claude/rules/air-<層>.md` | 各層規則（`AIR/rules/<層>.md` 的複本，前面加 `paths` 指向該層目錄）；Claude Code 讀寫該層時自動載入 | 是 |
 | `.claude/skills/air-*/` | 六個 skill（Claude Code） | 是 |
 | `.codex/hooks.json`、`.agents/skills/air-*/` | Codex 的五個 hook 與六個 skill | 是 |
 | `.air/project.toml` | 這個專案的設定：套件位置、測試指令、遷移階段 | 是 |
@@ -83,8 +84,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 ## 更新與移除
 
-- **更新**：用新版的 `AIR/` 整包取代舊的，再執行 `sh AIR/install.sh`。`.air/project.toml` 和遷移報告都會保留；2.2 以前放在各層目錄的 `CLAUDE.md` 會被移除（規則改由 hook 附上）。Codex 的 hook 設定變動後要重新信任。
-- **移除**：`sh AIR/uninstall.sh`。會移除所有標記區塊、hook 與 skill；`.air/` 與遷移報告會保留，加上 `--purge` 才會刪除。已經搬進各層的程式碼不會被動到。
+- **更新**：用新版的 `AIR/` 整包取代舊的，再執行 `sh AIR/install.sh`。`.air/project.toml` 和遷移報告都會保留；2.2 以前放在各層目錄的 `CLAUDE.md` 會被移除；2.6.1 以前 Claude Code 讀檔前的 hook 會被移除、改成產生 `.claude/rules/air-<層>.md`。Codex 的 hook 設定變動後要重新信任。
+- **移除**：`sh AIR/uninstall.sh`。會移除所有標記區塊、hook、skill 與 `.claude/rules/air-*.md`；`.air/` 與遷移報告會保留，加上 `--purge` 才會刪除。已經搬進各層的程式碼不會被動到。
 
 ## 常用指令
 

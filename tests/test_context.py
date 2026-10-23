@@ -1,4 +1,5 @@
-"""按需注入（context.py）：第一次讀寫某層附上那層的規則，同一個 session 只附一次；session 開始／壓縮後重置並附上狀態。"""
+"""按需注入（context.py）：沒有路徑規則的宿主（Codex）第一次編輯某層時附上那層的規則，同一個 session 只附一次；
+Claude Code 不經 hook，由 .claude/rules/air-<層>.md 自己載入（install.py）。session 開始／壓縮後重置並附上狀態。"""
 
 import json
 import os
@@ -9,12 +10,8 @@ from tests.helpers import ProjectTestCase
 from airkit import context
 
 
-def read_payload(path, session="s1") -> dict:
-    return {"session_id": session, "tool_name": "Read", "tool_input": {"file_path": str(path)}}
-
-
 def edit_payload(path, session="s1") -> dict:
-    return {"session_id": session, "tool_name": "Edit", "tool_input": {"file_path": str(path)}}
+    return {"session_id": session, "tool_name": "apply_patch", "tool_input": {"file_path": str(path)}}
 
 
 class TestInjection(ProjectTestCase):
@@ -30,33 +27,38 @@ class TestInjection(ProjectTestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
 
-    def test_first_read_injects_layer_rules_once_per_session(self):
-        first = self.context_of(self.p.hook("pre-read", read_payload(self.steps)))
+    def edit(self, path, session="s1") -> str:
+        """Codex 的 pre-edit：沒有路徑規則的宿主，規則由 hook 附上。"""
+        return self.context_of(self.p.hook("pre-edit", edit_payload(path, session), host="codex"))
+
+    def test_first_edit_injects_layer_rules_once_per_session(self):
+        first = self.edit(self.steps)
         self.assertIn("STEP-1", first)
         self.assertIn("AIR/rules/steps.md", first)
         self.assertIn("只附一次", first)
-        self.assertEqual(self.context_of(self.p.hook("pre-read", read_payload(self.steps))), "")
-        self.assertEqual(self.context_of(self.p.hook("pre-edit", edit_payload(self.steps))), "")  # 讀過就不再附
+        self.assertEqual(self.edit(self.steps), "")
+        self.assertEqual(self.edit(self.p.root / "demo" / "steps" / "new.py"), "")  # 同一層的另一個檔案也不再附
 
-    def test_first_edit_injects_when_not_read_before(self):
-        new = self.p.root / "demo" / "steps" / "new.py"
-        self.assertIn("STEP-2", self.context_of(self.p.hook("pre-edit", edit_payload(new))))
+    def test_claude_gets_nothing_from_the_hook_because_rules_come_from_dot_claude_rules(self):
+        # Claude Code 由宿主自己載入 .claude/rules/air-<層>.md：hook 再附一次就是重複，而且原本每次 Read 都多啟動一個 Python
+        r = self.p.hook("pre-edit", {"session_id": "s1", "tool_name": "Edit", "tool_input": {"file_path": str(self.steps)}})
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+        self.assertFalse((self.p.root / ".air" / "sessions").exists())  # 連注入紀錄都不用寫
+        self.assertEqual(self.p.air("hook", "pre-read").returncode, 2)  # 讀檔前的 hook 已經退休
 
     def test_other_layer_and_other_session_get_their_own(self):
-        self.p.hook("pre-read", read_payload(self.steps))
-        flows = self.context_of(self.p.hook("pre-read", read_payload(self.p.root / "demo" / "flows" / "f.py")))
+        self.edit(self.steps)
+        flows = self.edit(self.p.root / "demo" / "flows" / "f.py")
         self.assertIn("FLOW-1", flows)
         self.assertNotIn("# steps/ 規則", flows)
-        again = self.context_of(self.p.hook("pre-read", read_payload(self.steps, session="s2")))
-        self.assertIn("STEP-1", again)
+        self.assertIn("STEP-1", self.edit(self.steps, session="s2"))
 
     def test_tests_dir_gets_test_rules(self):
-        out = self.context_of(self.p.hook("pre-read", read_payload(self.p.root / "tests" / "test_a.py")))
-        self.assertIn("TEST-1", out)
+        self.assertIn("TEST-1", self.edit(self.p.root / "tests" / "test_a.py"))
 
     def test_file_in_adapter_subpackage_gets_adapter_rules(self):
         # adapters/<工具>/ 底下的檔案（ADP-1 的子套件）也是 adapters 層
-        out = self.context_of(self.p.hook("pre-read", read_payload(self.p.root / "demo" / "adapters" / "torch" / "trainer.py")))
+        out = self.edit(self.p.root / "demo" / "adapters" / "torch" / "trainer.py")
         self.assertIn("ADP-1", out)
         self.assertIn("AIR/rules/adapters.md", out)
 
@@ -64,33 +66,33 @@ class TestInjection(ProjectTestCase):
         for rel in ("demo/legacy.py", "README.md", "docs/AIR-遷移報告.md", "/etc/hosts"):
             with self.subTest(rel=rel):
                 path = rel if rel.startswith("/") else self.p.root / rel
-                self.assertEqual(self.context_of(self.p.hook("pre-read", read_payload(path))), "")
+                self.assertEqual(self.edit(path), "")
 
     def test_session_start_resets_so_rules_come_back_after_compaction(self):
-        self.p.hook("pre-read", read_payload(self.steps))
-        r = self.p.hook("session-start", {"session_id": "s1", "source": "compact"})
+        self.edit(self.steps)
+        r = self.p.hook("session-start", {"session_id": "s1", "source": "compact"}, host="codex")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("STEP-1", self.context_of(self.p.hook("pre-read", read_payload(self.steps))))
+        self.assertIn("STEP-1", self.edit(self.steps))
 
     def test_missing_session_id_still_works_with_shared_record(self):
-        payload = {"tool_name": "Read", "tool_input": {"file_path": str(self.steps)}}
-        self.assertIn("STEP-1", self.context_of(self.p.hook("pre-read", payload)))
-        self.assertEqual(self.context_of(self.p.hook("pre-read", payload)), "")
+        payload = {"tool_name": "apply_patch", "tool_input": {"file_path": str(self.steps)}}
+        self.assertIn("STEP-1", self.context_of(self.p.hook("pre-edit", payload, host="codex")))
+        self.assertEqual(self.context_of(self.p.hook("pre-edit", payload, host="codex")), "")
         self.assertTrue((self.p.root / ".air" / "sessions" / "unknown.json").exists())
 
     def test_session_record_is_in_air_sessions_and_ignored_by_git(self):
-        self.p.hook("pre-read", read_payload(self.steps, session="ab/c:d"))
+        self.edit(self.steps, session="ab/c:d")
         files = sorted(p.name for p in (self.p.root / ".air" / "sessions").iterdir())
         self.assertEqual(files, ["ab_c_d.json"])
         from airkit import install
         self.assertIn("sessions", install.AIR_IGNORE)
 
     def test_old_records_are_pruned_on_session_start(self):
-        self.p.hook("pre-read", read_payload(self.steps, session="old"))
+        self.edit(self.steps, session="old")
         old = self.p.root / ".air" / "sessions" / "old.json"
         stale = time.time() - (context.KEEP_DAYS + 1) * 86400
         os.utime(old, (stale, stale))
-        self.p.hook("pre-read", read_payload(self.steps, session="recent"))
+        self.edit(self.steps, session="recent")
         self.p.hook("session-start", {"session_id": "s9"})
         self.assertFalse(old.exists())
         self.assertTrue((self.p.root / ".air" / "sessions" / "recent.json").exists())
@@ -115,6 +117,17 @@ class TestSessionStart(ProjectTestCase):
         self.assertIn("分析階段", text)
         self.assertIn("不修改 .py", text)
         self.assertIn("AIR/rules/", text)
+
+    def test_rule_delivery_line_follows_the_host(self):
+        from airkit import hosts
+        claude = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("Claude Code 會自動載入 .claude/rules/air-<層>.md", claude)
+        self.assertNotIn("hook 會附上", claude)
+        codex = json.loads(self.p.hook("session-start", {"session_id": "s1"}, host="codex").stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("hook 會附上那一層的規則", codex)
+        self.assertNotIn(".claude/rules", codex)
+        self.assertIn("hook 會附上", context.session_context(self.p.cfg()))  # 沒給宿主：保守的說法
+        self.assertIn(".claude/rules", context.session_context(self.p.cfg(), hosts.CLAUDE))
 
     def test_current_stage_of_start_md_is_injected_instead_of_the_whole_file(self):
         from airkit import project

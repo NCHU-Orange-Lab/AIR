@@ -1,4 +1,4 @@
-"""air doctor：診斷接線。Python、設定、套件完整性、指引、每個宿主的 hook 與 skill（含真的跑一次的冒煙測試）、
+"""air doctor：診斷接線。Python、設定、套件完整性、指引、每個宿主的 hook、skill 與路徑規則（含真的跑一次的冒煙測試）、
 舊版留下的檔案、commit 前檢查、最近的 hook 錯誤。
 
 只讀，不修改任何東西；修法都是明確的指令（多半是 sh AIR/install.sh）。
@@ -101,7 +101,7 @@ def _instructions(root: Path) -> list[Item]:
     return items
 
 
-def _host(root: Path, host: hosts.Host, expected: bool) -> list[Item]:
+def _host(root: Path, host: hosts.Host, expected: bool, cfg: Config | None) -> list[Item]:
     kit = root / "AIR"
     hooks_file = root / host.hooks_file
     if not hooks_file.exists():
@@ -118,10 +118,14 @@ def _host(root: Path, host: hosts.Host, expected: bool) -> list[Item]:
         items.append(Item(FAIL, host.label, f"{host.hooks_file.as_posix()} 缺少 AIR 的 hook：{'、'.join(missing)}。{REINSTALL}"))
     else:
         items.append(Item(OK, host.label, f"{host.hooks_file.as_posix()} 有 {len(host.scripts)} 個 AIR hook"))
-    stale = install.stale_hooks(data, host)
+    present = {script for _, _, script in install.air_hooks(data)}
+    retired = sorted(present & set(hosts.LEGACY_SCRIPTS))  # 舊版裝的、這一版已經不用的 hook：一個注意就好，重新安裝會移除
+    if retired:
+        items.append(Item(WARN, host.label, f"{host.hooks_file.as_posix()} 還有舊版的 AIR hook（{'、'.join(retired)}；這一版不再使用）。{REINSTALL} 會移除"))
+    stale = [s for s in install.stale_hooks(data, host) if s not in hosts.LEGACY_SCRIPTS]
     if stale:
         items.append(Item(WARN, host.label, f"{host.hooks_file.as_posix()} 有舊版或別的宿主格式的 AIR hook（{'、'.join(stale)}）。{REINSTALL}"))
-    for script in {script for _, _, script in install.air_hooks(data)}:
+    for script in present - set(hosts.LEGACY_SCRIPTS):
         if not (kit / "hooks" / script).exists():
             items.append(Item(FAIL, host.label, f"{host.hooks_file.as_posix()} 指向不存在的腳本 AIR/hooks/{script}。{REINSTALL}"))
     missing_skills, foreign, stale_skills = [], [], []
@@ -141,6 +145,17 @@ def _host(root: Path, host: hosts.Host, expected: bool) -> list[Item]:
         items.append(Item(WARN, host.label, f"{host.skills_dir.as_posix()}/ 的 {'、'.join(stale_skills)} 不是目前版本。{REINSTALL}"))
     if not (missing_skills or foreign or stale_skills):
         items.append(Item(OK, host.label, f"{host.skills_dir.as_posix()}/ 有 {len(install.skill_names())} 個 skill"))
+    if host.rules_dir and cfg is not None:
+        d = host.rules_dir.as_posix()
+        missing_rules, foreign_rules, stale_rules = install.path_rules_status(root, host, cfg)
+        if missing_rules:
+            items.append(Item(FAIL, host.label, f"{d}/ 缺少各層的規則檔：{'、'.join(missing_rules)}（{host.label} 從這裡載入規則）。{REINSTALL}"))
+        if foreign_rules:
+            items.append(Item(WARN, host.label, f"{d}/ 裡的 {'、'.join(foreign_rules)} 不是 AIR 建立的，AIR 的版本沒有安裝"))
+        if stale_rules:
+            items.append(Item(WARN, host.label, f"{d}/ 的 {'、'.join(stale_rules)} 不是目前版本（更新 AIR 或改了套件位置後還沒重新安裝）。{REINSTALL}"))
+        if not (missing_rules or foreign_rules or stale_rules):
+            items.append(Item(OK, host.label, f"{d}/ 有 {len(install.rule_names())} 份各層規則（讀寫該層的檔案時由 {host.label} 自動載入）"))
     if host.note:
         items.append(Item(WARN, host.label, f"{host.note}（AIR 無法從外部確認是否已信任）"))
     return items
@@ -170,6 +185,8 @@ def _smoke(root: Path, host: hosts.Host) -> list[Item]:
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root)}
     items, ran = [], []
     for _event, command, script in install.air_hooks(data):
+        if script in hosts.LEGACY_SCRIPTS:
+            continue  # 退休的 hook 腳本已經不在套件裡，上面已經提醒重新安裝
         start = time.monotonic()
         try:
             r = subprocess.run(["sh", "-c", command], cwd=root, input=b"{}", capture_output=True, timeout=SMOKE_TIMEOUT, env=env)
@@ -222,7 +239,7 @@ def diagnose(root: Path) -> list[Item]:
     items = [_python(root), config_item, _integrity(root / "AIR"), *_instructions(root)]
     installed = install.installed_hosts(root) or []
     for host in hosts.HOSTS.values():
-        items += _host(root, host, host in installed)
+        items += _host(root, host, host in installed, cfg)
         if host in installed and (root / host.hooks_file).exists():
             items += _smoke(root, host)
     items += _stale_rules(root, cfg)

@@ -9,7 +9,7 @@ description: 需要使用第三方工具或外部服務（YOLO 等模型、OCR�
 
 ## 開始前
 
-這個任務會改到多層，**改到哪一層就照哪一層的規則**（`AIR/rules/<層>.md`，第一次讀寫時 hook 會附上）：adapters（必讀）、contracts（定義介面時）、flows（注入時）、main（組裝時）。
+這個任務會改到多層，**改到哪一層就照哪一層的規則**（`AIR/rules/<層>.md`，讀寫該層時會自動附上）：adapters（必讀）、contracts（定義介面時）、flows（注入時）、main（組裝時）。
 
 ## 步驟
 

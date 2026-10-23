@@ -1,7 +1,9 @@
-"""按需注入：第一次讀寫某一層的檔案時，把那一層的規則附給 AI（additionalContext）；session 開始與壓縮後重置，並附上目前狀態。
+"""按需注入（沒有路徑規則的宿主，目前是 Codex）：第一次編輯某一層的檔案時，把那一層的規則附給 AI（additionalContext）；
+session 開始與壓縮後重置，並附上目前狀態。
 
-取代「各層目錄放 CLAUDE.md、靠宿主自動載入」：hook 在 Claude Code 與 Codex 都會觸發，規則只有一個來源（AIR/rules/），
-而且可以在測試裡驗證。注入紀錄放在 .air/sessions/<session_id>.json（不進版本控制）。
+Claude Code 不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rules/air-<層>.md（帶 paths 前言，見 install.py），
+讀寫該層的檔案時由宿主自己載入，不啟動 Python（實測每次 Read 多一個 Python 行程，Windows 上約 0.36 秒）。
+規則仍只有 AIR/rules/ 一個來源。注入紀錄放在 .air/sessions/<session_id>.json（不進版本控制）。
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from pathlib import Path
 
 from . import project
 from .config import KIT_DIR, Config
+from .hosts import Host
 from .rules import name_for as rule_name  # noqa: F401 — 哪個檔案適用哪份規則，跟語意審查共用同一個判斷
 
 SESSIONS_DIR = Path(".air") / "sessions"
@@ -69,7 +72,7 @@ def rules_to_inject(cfg: Config, session_id: str, paths) -> str:
         return ""
     remember(cfg.root, session_id, names)
     return "\n\n".join(
-        f"【AIR：你正要讀寫 {name} 的檔案，這是它的規則（AIR/rules/{name}.md；這個 session 只附一次）】\n{rule_text(name)}"
+        f"【AIR：你正要修改 {name} 的檔案，這是它的規則（AIR/rules/{name}.md；這個 session 只附一次）】\n{rule_text(name)}"
         for name in sorted(names)
     )
 
@@ -81,8 +84,12 @@ def stage_text(stage: int) -> str:
     return m.group(0).strip() if m else ""
 
 
-def session_context(cfg: Config) -> str:
+def session_context(cfg: Config, host: Host | None = None) -> str:
     """session 開始、壓縮後附上的狀態摘要：由目前的設定、檢查結果與驗收紀錄重新算，不信任任何摘要。"""
+    if host is not None and host.rules_dir:
+        how = f"讀寫某一層的檔案時，{host.label} 會自動載入 {host.rules_dir.as_posix()}/air-<層>.md（AIR/rules/<層>.md 的複本）"
+    else:
+        how = "第一次修改某一層的檔案時，hook 會附上那一層的規則（AIR/rules/<層>.md）"
     pause = project.paused(cfg.root)
     if pause is not None:  # 暫停中：不催該階段的事，也不附 START.md；新程式仍要寫進對應的層
         guide = (f"遷移暫停中（{project.describe_pause(pause)}；階段 {cfg.phase} 保留）：照一般開發進行，新程式仍寫進對應的層，"
@@ -93,7 +100,7 @@ def session_context(cfg: Config) -> str:
         "【AIR 目前狀態（由 hook 在 session 開始與壓縮後附上）】",
         project.status(cfg),
         f"現在該做的事：{guide}",
-        "規則：常駐規則在 AIR/AGENTS.md；第一次讀寫某一層的檔案時，hook 會附上那一層的規則（AIR/rules/<層>.md）。",
+        f"規則：常駐規則在 AIR/AGENTS.md；{how}。",
     ]
     stage = STAGE_OF_PHASE.get(cfg.phase) if pause is None else None
     section = stage_text(stage) if stage else ""

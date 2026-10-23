@@ -24,6 +24,7 @@ class TestRepoManifest(unittest.TestCase):
         self.assertIn("hooks/pre_edit.sh", names)
         self.assertIn("hooks/session_start.sh", names)
         self.assertIn("hooks/_python.sh", names)
+        self.assertNotIn("hooks/pre_read.sh", names)  # 2.6.2 退休：Claude Code 改用 .claude/rules
 
 
 class TestManifest(ProjectTestCase):
@@ -166,6 +167,15 @@ class TestWiring(ProjectTestCase):
         data["hooks"]["Stop"][0]["hooks"][0]["command"] = '"$CLAUDE_PROJECT_DIR"/AIR/hooks/stop.sh'
         self.settings.write_text(json.dumps(data), encoding="utf-8")
         self.assertEqual(self.p.air("check").returncode, 0)
+
+    def test_removed_rule_file_is_air009(self):
+        # Claude Code 從 .claude/rules 載入各層規則：檔案不見了等於規則不會送到 AI 面前，跟少了 hook 一樣算 AIR009
+        (self.p.root / ".claude" / "rules" / "air-steps.md").unlink()
+        r = self.p.air("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("缺少 AIR 的規則檔", r.stdout)
+        self.assertIn("air-steps.md", r.stdout)
+        self.assertNotIn("air-flows.md", r.stdout)
 
     def test_removed_instruction_block_is_air009(self):
         (self.p.root / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")

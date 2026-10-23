@@ -24,9 +24,11 @@ class TestDoctor(ProjectTestCase):
         r = self.p.air("doctor")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertEqual(self.levels()["fail"], [])
-        self.assertIn("[OK] Claude Code：.claude/settings.json 有 6 個 AIR hook", r.stdout)
+        self.assertIn("[OK] Claude Code：.claude/settings.json 有 5 個 AIR hook", r.stdout)
         self.assertIn("[OK] Codex：.codex/hooks.json 有 5 個 AIR hook", r.stdout)
-        self.assertIn("[OK] Claude Code：hook 冒煙測試：6 個都能執行", r.stdout)
+        self.assertIn("[OK] Claude Code：.claude/rules/ 有 7 份各層規則（讀寫該層的檔案時由 Claude Code 自動載入）", r.stdout)
+        self.assertNotIn("Codex：.agents/rules", r.stdout)
+        self.assertIn("[OK] Claude Code：hook 冒煙測試：5 個都能執行", r.stdout)
         self.assertIn("[OK] Codex：hook 冒煙測試：5 個都能執行", r.stdout)
         self.assertIn("[OK] commit 前檢查", r.stdout)
         self.assertTrue(any("信任" in w for w in self.levels()["warn"]))  # Codex 的 hook 要信任，AIR 無法確認
@@ -55,6 +57,37 @@ class TestDoctor(ProjectTestCase):
         levels = self.levels()
         self.assertEqual(levels["fail"], [])
         self.assertTrue(any("未安裝" in w and "codex" in w for w in levels["warn"]))
+
+    def test_missing_rule_file_is_a_problem_stale_or_foreign_is_a_note(self):
+        rules = self.p.root / ".claude" / "rules"
+        (rules / "air-steps.md").unlink()
+        levels = self.levels()
+        self.assertTrue(any("缺少各層的規則檔：air-steps.md" in f for f in levels["fail"]))
+        self.assertEqual(self.p.air("doctor").returncode, 1)
+        self.assertEqual(self.p.air("install").returncode, 0)  # 修法就是重跑安裝
+        self.assertEqual(self.levels()["fail"], [])
+        flows = rules / "air-flows.md"
+        flows.write_text(flows.read_text(encoding="utf-8").replace("FLOW-1", "FLOW-9"), encoding="utf-8")
+        self.p.write(".claude/rules/air-main.md", "# 不是 AIR 的\n")
+        levels = self.levels()
+        self.assertEqual(levels["fail"], [])
+        self.assertTrue(any("air-flows.md 不是目前版本" in w for w in levels["warn"]))
+        self.assertTrue(any("air-main.md 不是 AIR 建立的" in w for w in levels["warn"]))
+
+    def test_retired_read_hook_is_one_note_not_three_problems(self):
+        # 2.6.1 以前的 settings.json 還有 pre_read.sh：腳本已經不在套件裡，不該變成「指向不存在的腳本」加冒煙測試失敗
+        settings = self.p.root / ".claude" / "settings.json"
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        data["hooks"]["PreToolUse"].append({"matcher": "Read", "hooks": [{"type": "command", "command": hosts.hook_command(hosts.CLAUDE, "pre_read.sh"), "timeout": 30}]})
+        settings.write_text(json.dumps(data), encoding="utf-8")
+        levels = self.levels()
+        self.assertEqual(levels["fail"], [])
+        notes = [w for w in levels["warn"] if "pre_read.sh" in w]
+        self.assertEqual(len(notes), 1, levels["warn"])
+        self.assertIn("這一版不再使用", notes[0])
+        self.assertIn("會移除", notes[0])
+        self.assertEqual(self.p.air("install").returncode, 0)
+        self.assertFalse(any("pre_read.sh" in w for w in self.levels()["warn"]))
 
     def test_legacy_hook_form_is_a_note(self):
         settings = self.p.root / ".claude" / "settings.json"
