@@ -116,6 +116,22 @@ class TestSessionStart(ProjectTestCase):
         self.assertIn("不修改 .py", text)
         self.assertIn("AIR/rules/", text)
 
+    def test_current_stage_of_start_md_is_injected_instead_of_the_whole_file(self):
+        from airkit import project
+        text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("【AIR/START.md 階段 2（已附上這一節，不用再讀整份 START.md）】", text)
+        self.assertIn("survey", text)
+        self.assertNotIn("## 階段 3", text)
+        self.assertNotIn("## 階段 1", text)
+        project.set_phase(self.p.cfg(), "migrating")
+        text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("階段 5", text)
+        self.assertIn("補行為保護測試", text)
+        project.set_phase(self.p.cfg(), "done")
+        text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("【AIR/START.md", text)
+        self.assertEqual(context.stage_text(9), "")
+
     def test_guidance_follows_phase(self):
         from airkit import project
         project.set_phase(self.p.cfg(), "migrating")

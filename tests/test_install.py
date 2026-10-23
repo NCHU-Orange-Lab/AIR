@@ -249,7 +249,7 @@ class TestFullInstall(ProjectTestCase):
         self.assertIn("信任", r.stdout)  # Codex 的 hook 要使用者信任
         self.assertTrue(os.access(self.p.root / ".git" / "hooks" / "pre-commit", os.X_OK))
         ignore = (self.p.root / ".air" / ".gitignore").read_text(encoding="utf-8").split()
-        for name in ("python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log"):
+        for name in ("python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log", "last-check.json", "metrics.jsonl"):
             self.assertIn(name, ignore)
         r2 = self.p.air("install")
         self.assertEqual(r2.returncode, 0)

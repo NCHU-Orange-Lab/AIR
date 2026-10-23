@@ -1,10 +1,14 @@
 """語意審查：補上沒有程式檢查的規則（skill air-review 的程式部分）。
 
 36 條規則裡只有 10 條有程式檢查（7 條完整、3 條部分），其餘靠審查。程式負責能機械判斷的部分：
-  範圍  用 git 界定「這次的變更」：改了哪些層內的 .py、改到哪些行；每個檔案要對照哪些規則（沒有〔hook 檢查〕標記的）與出處
-  驗證  模型交回的結果：規則存在、適用該層、不是 check 負責的、行號落在改到的行附近、信心與優先級在範圍內、結論與發現一致
-  紀錄  通過驗證的結果寫進 .air/review.json，綁定這次變更的指紋；之後變更的內容又變了，紀錄就過期
+  範圍  用 git 界定「這次的變更」：改了哪些層內的 .py、改到哪些行；每一層要對照哪些規則（沒有〔hook 檢查〕標記的）與出處。
+        規則每層只列一次；上次審過、內容沒變的檔案只列名字，沿用上次的發現，不必重審
+  驗證  模型交回的結果：規則存在、適用該層、不是 check 負責的、行號落在改到的行附近、信心與優先級在範圍內、
+        結論與發現一致（含沿用的發現）
+  紀錄  通過驗證的結果寫進 .air/review.json：每個檔案一筆，綁定該檔內容的 sha256；之後哪個檔案又改了，只有那個檔案要重審
 判斷本身由模型做（做法在 skill air-review）。結果只是參考：不擋 commit，也不能推翻 check 或 verify 的失敗。
+
+為什麼每個檔案一筆：原本整批一個指紋，修掉一個發現就整批作廢、全部重讀，是實戰中最大的 token 放大器之一。
 """
 
 from __future__ import annotations
@@ -19,15 +23,17 @@ from .checks import rel
 from .config import Config
 
 RECORD_FILE = Path(".air") / "review.json"
-SCHEMA = "air.review.v1"
-SCOPE_SCHEMA = "air.review-scope.v1"
+SCHEMA = "air.review.v2"
+SCOPE_SCHEMA = "air.review-scope.v2"
 MIN_CONFIDENCE = 0.5   # 不到這個信心的發現不收（不確定就不報）
 NEAR = 3               # 發現的行號離改到的行最多差這麼多行，才算「這次變更引入的」
 BLOCKING = (0, 1)      # 必須處理（或向使用者說明）的 priority
 TOP_KEYS = ("findings", "overall", "explanation")
+OPTIONAL_KEYS = ("rereviewed",)  # 沿用的檔案如果這次真的重審過（例如上次是誤判），列在這裡，它的發現就以這次交回的為準
 FINDING_KEYS = ("rule", "title", "body", "confidence", "priority", "path", "lines")
 OVERALL = ("pass", "fail")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
+STATUS = {"added": "新增", "modified": "修改", "untracked": "新檔案"}
 
 
 class ReviewError(ValueError):
@@ -41,6 +47,7 @@ class ChangedFile:
     lines: tuple[tuple[int, int], ...] | None  # 改到的行（新內容的行號）；None＝整個檔案都是新的
     name: str | None                          # 適用的規則檔（層或 tests）；None＝不在範圍
     why: str = ""                             # 不在範圍的原因
+    sha: str = ""                             # 內容的 sha256（在範圍的檔案才算）
 
 
 # ── 用 git 界定這次的變更 ──
@@ -90,6 +97,10 @@ def _hunks(root: Path, ref: str, name: str) -> tuple[tuple[int, int], ...]:
     return tuple(ranges)
 
 
+def file_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def changed_files(cfg: Config, base: str | None = None) -> tuple[str | None, list[ChangedFile]]:
     root, ref = cfg.root, _ref(cfg.root, base)
     files = []
@@ -104,7 +115,7 @@ def changed_files(cfg: Config, base: str | None = None) -> tuple[str | None, lis
             files.append(ChangedFile(path, status, None, None, "不在任何層（舊程式碼或其他檔案）"))
         else:
             lines = _hunks(root, ref, name) if status == "modified" and ref else None
-            files.append(ChangedFile(path, status, lines, rule_name))
+            files.append(ChangedFile(path, status, lines, rule_name, sha=file_sha(path)))
     return ref, files
 
 
@@ -115,18 +126,30 @@ def _fingerprint(files: list[ChangedFile], root: Path, ref: str | None) -> str:
 
 
 def scope(cfg: Config, base: str | None = None) -> dict:
-    """這次變更的審查範圍：層內的 .py（各自要對照哪些規則）、不在範圍的檔案、綁定這批內容的指紋。"""
+    """這次變更的審查範圍：每層的規則（只列一次）、層內的 .py（內容沒變的沿用上次審查）、不在範圍的檔案。"""
     ref, files = changed_files(cfg, base)
     in_scope = [f for f in files if f.name]
+    kept = (load_record(cfg.root) or {}).get("files", {})
+    order = {name: i for i, name in enumerate([*cfg.layers, "tests"])}
+    entries = []
+    for f in in_scope:
+        path = rel(f.path, cfg.root)
+        old = kept.get(path)
+        reused = bool(old) and old.get("sha") == f.sha
+        entries.append({
+            "path": path, "layer": f.name, "status": f.status, "sha": f.sha,
+            "changed_lines": None if f.lines is None else [list(r) for r in f.lines],
+            "reused": reused,
+            "findings": len(old["findings"]) if reused else None,
+            "blocking": sum(x["priority"] in BLOCKING for x in old["findings"]) if reused else None,
+        })
+    layers = sorted({e["layer"] for e in entries if not e["reused"]}, key=lambda n: order.get(n, 99))  # 只列有待審檔案的層
     return {
         "schema": SCOPE_SCHEMA,
         "base": base,
         "ref": ref,
-        "files": [{
-            "path": rel(f.path, cfg.root), "layer": f.name, "status": f.status,
-            "changed_lines": None if f.lines is None else [list(r) for r in f.lines],
-            "rules": [r.to_dict() for r in rules.for_review(f.name)],
-        } for f in in_scope],
+        "rules": {name: [r.to_dict() for r in rules.for_review(name)] for name in layers},
+        "files": entries,
         "out_of_scope": [{"path": rel(f.path, cfg.root), "why": f.why} for f in files if not f.name],
         "fingerprint": _fingerprint(in_scope, cfg.root, ref),
     }
@@ -140,26 +163,36 @@ def format_scope(sc: dict) -> str:
     against = f"相對 {sc['base']}（merge-base {sc['ref'][:12]}）" if sc["base"] else (
         f"相對 HEAD {sc['ref'][:12]}" if sc["ref"] else "還沒有 commit，所有檔案都算新的")
     lines = [f"AIR 語意審查範圍：{against}，含未 commit 的修改"]
+    todo = [f for f in sc["files"] if not f["reused"]]
+    reused = [f for f in sc["files"] if f["reused"]]
     if not sc["files"]:
         lines.append("  沒有要審查的變更（層內沒有改到的 .py）。")
-    status = {"added": "新增", "modified": "修改", "untracked": "新檔案"}
-    for f in sc["files"]:
-        lines.append(f"  {f['path']}（{f['layer']}，{status[f['status']]}；改到的行：{_ranges(f['changed_lines'])}）")
-        for r in f["rules"]:
+    if reused:
+        lines.append("  沿用上次審查（內容沒變，不必重審）：" + "、".join(f"{f['path']}（{f['findings']} 個發現）" for f in reused))
+    for layer, rs in sc["rules"].items():
+        mine = [f for f in todo if f["layer"] == layer]
+        if not mine:
+            continue
+        lines.append(f"  【{layer} 的規則】對照底下 {len(mine)} 個檔案（規則只列一次）")
+        for r in rs:
             gap = f"　← 只審程式抓不到的部分：{r['gap']}" if r["gap"] else ""
             lines.append(f"    {r['id']}【{r['level']}】{r['text']}　（{r['source']}:{r['line']}）{gap}")
+        for f in mine:
+            lines.append(f"    檔案：{f['path']}（{STATUS[f['status']]}；改到的行：{_ranges(f['changed_lines'])}）")
     if sc["out_of_scope"]:
         shown = sc["out_of_scope"][:15]
         more = f"…等 {len(sc['out_of_scope'])} 個" if len(sc["out_of_scope"]) > 15 else ""
         lines.append("  不在範圍：" + "、".join(f"{f['path']}（{f['why']}）" for f in shown) + more)
-    tracked = [f["path"] for f in sc["files"] if f["status"] != "untracked"]
-    fresh = [f["path"] for f in sc["files"] if f["status"] == "untracked"]
+    tracked = [f["path"] for f in todo if f["status"] != "untracked"]
+    fresh = [f["path"] for f in todo if f["status"] == "untracked"]
     if tracked and sc["ref"]:
         lines.append(f"看差異：git diff --no-renames {sc['ref'][:12]} -- " + " ".join(tracked))
     if fresh:
         lines.append("新檔案（整個檔案都在範圍，直接讀）：" + " ".join(fresh))
-    if sc["files"]:
-        lines.append("審完交回：python3 AIR/air.py review --result - <<'EOF' … EOF（JSON 格式見 skill air-review）")
+    if todo:
+        lines.append("審完交回：python3 AIR/air.py review --result - <<'EOF' … EOF（JSON 格式見 skill air-review；只交這次審的檔案，沿用的不用再列）")
+    elif reused:
+        lines.append("全部沿用，沒有要重審的檔案；紀錄與目前的變更一致。")
     return "\n".join(lines)
 
 
@@ -190,11 +223,11 @@ def validate(sc: dict, data) -> tuple[list[str], list[dict]]:
     if not isinstance(data, dict):
         return ["結果要是 JSON 物件（{\"findings\": [...], \"overall\": ..., \"explanation\": ...}）"], []
     errors = []
-    missing, extra = set(TOP_KEYS) - set(data), set(data) - set(TOP_KEYS)
+    missing, extra = set(TOP_KEYS) - set(data), set(data) - set(TOP_KEYS) - set(OPTIONAL_KEYS)
     if missing:
         errors.append(f"缺少欄位：{'、'.join(sorted(missing))}")
     if extra:
-        errors.append(f"不認得的欄位：{'、'.join(sorted(extra))}（只能有 {'、'.join(TOP_KEYS)}）")
+        errors.append(f"不認得的欄位：{'、'.join(sorted(extra))}（只能有 {'、'.join(TOP_KEYS)}，選用 {'、'.join(OPTIONAL_KEYS)}）")
     findings = data.get("findings", [])
     if not isinstance(findings, list):
         errors.append("findings 要是陣列（沒有發現就 []）")
@@ -204,6 +237,14 @@ def validate(sc: dict, data) -> tuple[list[str], list[dict]]:
     if not isinstance(data.get("explanation"), str):
         errors.append("explanation 要是字串")
     files = {f["path"]: f for f in sc["files"]}
+    rereviewed = data.get("rereviewed", [])
+    if not isinstance(rereviewed, list) or not all(isinstance(p, str) for p in rereviewed):
+        errors.append("rereviewed 要是路徑的陣列")
+        rereviewed = []
+    rereviewed = [p.replace("\\", "/") for p in rereviewed]
+    for p in rereviewed:
+        if p not in files:
+            errors.append(f"rereviewed：{p!r} 不在這次變更的範圍")
     known = rules.by_id()
     out = []
     for i, f in enumerate(findings, 1):
@@ -248,41 +289,68 @@ def validate(sc: dict, data) -> tuple[list[str], list[dict]]:
         if len(errors) == before:
             out.append({**f, "path": path_key, "level": rule.level, "rule_text": rule.text, "rule_source": {"path": rule.source, "line": rule.line}})
     if not errors:
-        blocking = any(f["priority"] in BLOCKING for f in out)
+        submitted = {f["path"] for f in out} | set(rereviewed)
+        # 沿用的檔案如果這次沒有重新交回，它們上次的發現仍然有效，結論要把它們算進去
+        kept_blocking = any(f["reused"] and f["blocking"] and f["path"] not in submitted for f in sc["files"])
+        blocking = kept_blocking or any(f["priority"] in BLOCKING for f in out)
         expected = "fail" if blocking else "pass"
         if data["overall"] != expected:
-            errors.append(f"overall 應該是 {expected}：{'有' if blocking else '沒有'} priority 0 或 1 的發現")
+            why = "有 priority 0 或 1 的發現" + ("（含沿用上次審查的檔案）" if kept_blocking else "") if blocking else "沒有 priority 0 或 1 的發現"
+            errors.append(f"overall 應該是 {expected}：{why}")
     return errors, out
 
 
 # ── 紀錄 ──
 
 def record(cfg: Config, sc: dict, data: dict, findings: list[dict]) -> dict:
+    """每個檔案一筆：這次交回的檔案換成新的發現；沿用的檔案保留上次的；不在範圍的檔案不留。"""
+    kept = (load_record(cfg.root) or {}).get("files", {})
+    by_path: dict[str, list[dict]] = {}
+    for f in findings:
+        by_path.setdefault(f["path"], []).append(f)
+    rereviewed = {p.replace("\\", "/") for p in data.get("rereviewed", [])}
+    now = verify.now()
+    files = {}
+    for f in sc["files"]:
+        path = f["path"]
+        if f["reused"] and path not in by_path and path not in rereviewed:
+            files[path] = kept[path]
+        else:
+            files[path] = {"sha": f["sha"], "layer": f["layer"], "findings": by_path.get(path, []), "time": now}
+    flat = [x for path in files for x in files[path]["findings"]]
+    blocking = sum(x["priority"] in BLOCKING for x in flat)
     rec = {
-        "schema": SCHEMA, "time": verify.now(), "base": sc["base"], "ref": sc["ref"], "fingerprint": sc["fingerprint"],
-        "files": [f["path"] for f in sc["files"]], "findings": findings,
-        "blocking": sum(f["priority"] in BLOCKING for f in findings),
-        "overall": data["overall"], "explanation": data["explanation"],
+        "schema": SCHEMA, "time": now, "base": sc["base"], "ref": sc["ref"],
+        "files": files, "findings": flat, "blocking": blocking,
+        "overall": "fail" if blocking else "pass", "explanation": data["explanation"],
+        "reused": sum(1 for f in sc["files"] if f["reused"] and f["path"] not in by_path and f["path"] not in rereviewed),
     }
     verify.write_json(cfg.root / RECORD_FILE, rec)
     return rec
 
 
 def load_record(root: Path) -> dict | None:
-    return verify.load_json(root / RECORD_FILE, SCHEMA)
+    rec = verify.load_json(root / RECORD_FILE, SCHEMA)
+    return rec if rec and isinstance(rec.get("files"), dict) else None
 
 
-def state(cfg: Config, rec: dict | None) -> str:
-    """none｜fresh（與目前的變更一致）｜stale（審查後變更的內容又變了）｜clean（目前沒有要審的變更）｜unknown（不是 git repo）"""
+def _state(cfg: Config, rec: dict | None) -> tuple[str, int]:
+    """(none｜fresh｜stale｜clean｜unknown, 要重審的檔案數)。"""
     if rec is None:
-        return "none"
+        return "none", 0
     try:
         sc = scope(cfg, rec.get("base"))
     except ReviewError:
-        return "unknown"
+        return "unknown", 0
     if not sc["files"]:
-        return "clean"
-    return "fresh" if sc["fingerprint"] == rec.get("fingerprint") else "stale"
+        return "clean", 0
+    todo = sum(1 for f in sc["files"] if not f["reused"])
+    return ("fresh" if todo == 0 else "stale"), todo
+
+
+def state(cfg: Config, rec: dict | None) -> str:
+    """none｜fresh（每個檔案都與審過的內容一致）｜stale（有檔案改過，只有那些要重審）｜clean（目前沒有要審的變更）｜unknown（不是 git repo）"""
+    return _state(cfg, rec)[0]
 
 
 def verdict(rec: dict) -> str:
@@ -292,13 +360,13 @@ def verdict(rec: dict) -> str:
 
 def describe(cfg: Config, rec: dict | None) -> str:
     """給 status 用的一行說明。"""
-    st = state(cfg, rec)
+    st, todo = _state(cfg, rec)
     if st == "none":
         return "無（每批 commit 前照 skill air-review 做）"
     if st == "unknown":
         return "無法判斷（不是 git repo）"
     when = rec["time"][:16].replace("T", " ")
-    note = {"fresh": "與目前的變更一致", "stale": "已過期：之後變更的內容又變了，要重新審查", "clean": "目前沒有要審查的變更"}[st]
+    note = {"fresh": "與目前的變更一致", "stale": f"已過期：{todo} 個檔案改過，只有它們要重審（其餘沿用）", "clean": "目前沒有要審查的變更"}[st]
     return f"{verdict(rec)}（{when}；{note}）"
 
 
@@ -312,7 +380,9 @@ def format_result(rec: dict) -> str:
         where = f"{f['path']}:{_ranges([[f['lines']['start'], f['lines']['end']]])}"
         lines.append(f"  [P{f['priority']}] {f['rule']}【{f['level']}】{where}　{f['title']}"
                      f"（信心 {f['confidence']}；{f['rule_source']['path']}:{f['rule_source']['line']}）")
+    if rec.get("reused"):
+        lines.append(f"  （{rec['reused']} 個檔案沿用上次審查的發現）")
     if rec["blocking"]:
-        lines.append("priority 0／1 的發現必須處理，或向使用者說明為什麼不處理；處理後要重新審查。")
-    lines.append(f"紀錄已寫入 {RECORD_FILE.as_posix()}（綁定這次變更的內容，之後又改了就過期）")
+        lines.append("priority 0／1 的發現必須處理，或向使用者說明為什麼不處理；處理後只有改過的檔案要重審。")
+    lines.append(f"紀錄已寫入 {RECORD_FILE.as_posix()}（每個檔案綁定它的內容；之後哪個檔案又改了，只有那個檔案要重審）")
     return "\n".join(lines)

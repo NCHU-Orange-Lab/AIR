@@ -30,7 +30,8 @@
         }
       }
     },
-    "overall": {"type": "string", "enum": ["pass", "fail"], "description": "有 priority 0 或 1 的發現就是 fail"},
-    "explanation": {"type": "string"}
+    "overall": {"type": "string", "enum": ["pass", "fail"], "description": "有 priority 0 或 1 的發現就是 fail（含沿用上次審查的檔案）"},
+    "explanation": {"type": "string"},
+    "rereviewed": {"type": "array", "items": {"type": "string"}, "description": "選用：沿用的檔案如果這次真的重審過（例如上次是誤判），列在這裡，它的發現就以這次交回的為準"}
   }
 }

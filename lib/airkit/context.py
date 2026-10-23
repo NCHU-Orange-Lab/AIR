@@ -16,6 +16,7 @@ from .config import KIT_DIR, Config
 from .rules import name_for as rule_name  # noqa: F401 — 哪個檔案適用哪份規則，跟語意審查共用同一個判斷
 
 SESSIONS_DIR = Path(".air") / "sessions"
+STAGE_OF_PHASE = {"installed": 2, "analyzed": 3, "planned": 4, "layered": 5, "migrating": 5}  # 這個階段該讀 START.md 的哪一節
 KEEP_DAYS = 7  # 超過這麼久沒動的注入紀錄，session 開始時順便清掉
 PHASE_GUIDE = {
     "installed": "分析階段（AIR/START.md 階段 2）：只讀程式、寫遷移報告，不修改 .py（會被擋下）。",
@@ -73,12 +74,24 @@ def rules_to_inject(cfg: Config, session_id: str, paths) -> str:
     )
 
 
+def stage_text(stage: int) -> str:
+    """START.md 裡「## 階段 N」那一節（到下一個 ## 或 --- 為止）。只附當下的階段：整份 START.md 近 4,000 字，5/6 跟當下無關。"""
+    text = (KIT_DIR / "START.md").read_text(encoding="utf-8")
+    m = re.search(rf"^## 階段 {stage}：.*?(?=^## |^---)", text, re.M | re.S)
+    return m.group(0).strip() if m else ""
+
+
 def session_context(cfg: Config) -> str:
     """session 開始、壓縮後附上的狀態摘要：由目前的設定、檢查結果與驗收紀錄重新算，不信任任何摘要。"""
     guide = PHASE_GUIDE.get(cfg.phase, f"未知的階段 {cfg.phase}：請使用者檢查 .air/project.toml")
-    return "\n".join([
+    lines = [
         "【AIR 目前狀態（由 hook 在 session 開始與壓縮後附上）】",
         project.status(cfg),
         f"現在該做的事：{guide}",
         "規則：常駐規則在 AIR/AGENTS.md；第一次讀寫某一層的檔案時，hook 會附上那一層的規則（AIR/rules/<層>.md）。",
-    ])
+    ]
+    stage = STAGE_OF_PHASE.get(cfg.phase)
+    section = stage_text(stage) if stage else ""
+    if section:
+        lines += ["", f"【AIR/START.md 階段 {stage}（已附上這一節，不用再讀整份 START.md）】", section]
+    return "\n".join(lines)

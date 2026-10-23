@@ -50,6 +50,28 @@ class Violation:
         return {"path": rel(self.path, root), "line": self.line, "col": self.col, "code": self.code, "msg": self.msg}
 
 
+def grouped(violations: list[Violation]) -> list[tuple[str, str, list[Violation]]]:
+    """依（代碼、訊息）分組，最多的在前。全專案檢查時同一種違規常出現幾十次，修法只需要印一次。"""
+    groups: dict[tuple[str, str], list[Violation]] = {}
+    for v in violations:
+        groups.setdefault((v.code, v.msg), []).append(v)
+    return [(code, msg, vs) for (code, msg), vs in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
+
+
+def format_grouped(violations: list[Violation], root: Path, limit: int | None = None) -> list[str]:
+    """給人看的違規清單：只有一處的照原樣印；多處的印一次「代碼 ×N：訊息」再列位置。limit 是最多印幾組。"""
+    lines = []
+    for i, (code, msg, vs) in enumerate(grouped(violations)):
+        if limit is not None and i >= limit:
+            break
+        if len(vs) == 1:
+            lines.append(vs[0].format(root))
+        else:
+            lines.append(f"{code} ×{len(vs)}：{msg}")
+            lines.append("  " + "、".join(f"{rel(v.path, root)}:{v.line}:{v.col}" for v in vs))
+    return lines
+
+
 # 指定了檔案但沒檢查的原因
 MISSING, NOT_PY, OUTSIDE = "找不到檔案", "不是 .py", "不在任何層內"
 # verdict → CLI 結束碼

@@ -8,8 +8,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import hooklog, install, review, verify
-from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source
+from . import hooklog, install, review, usage, verify
+from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source, rel
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
 
@@ -155,10 +155,34 @@ def _module_facts(file: Path, cfg: Config) -> dict:
     }
 
 
-def survey(cfg: Config) -> str:
-    """盤點套件內所有模組，輸出 Markdown，作為分析報告的素材。"""
+def survey_rows(cfg: Config) -> list[dict]:
     files = sorted(cfg.package_dir.rglob("*.py")) if cfg.package_dir.is_dir() else []
-    rows = [_module_facts(f, cfg) for f in files]
+    return [_module_facts(f, cfg) for f in files]
+
+
+def survey_summary(cfg: Config, rows: list[dict], out: Path | None) -> str:
+    """給畫面看的摘要：完整的表寫在檔案裡，不要一次印進對話（實戰中每個模組約 166 字，幾百個模組就是幾萬 token）。"""
+    ok = [r for r in rows if "error" not in r]
+    third: dict[str, int] = {}
+    for r in ok:
+        for m in r["third_party"]:
+            third[m] = third.get(m, 0) + 1
+    top_third = sorted(third.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    noisy = sorted((r for r in ok if r["signals"]), key=lambda r: (-len(r["signals"]), r["module"]))[:10]
+    lines = [
+        f"AIR survey：{cfg.package}",
+        f"- 模組數：{len(rows)}（已在層內：{sum(1 for r in rows if r['layer'])}；無法解析：{len(rows) - len(ok)}）",
+        "- 第三方套件（用到的模組數）：" + ("、".join(f"{m}（{n}）" for m, n in top_third) or "無"),
+        "- 訊號最多的模組（需要拆開的候選）：" + ("、".join(f"`{r['module']}`（{len(r['signals'])} 處）" for r in noisy) or "無"),
+    ]
+    if out is not None:
+        lines.append(f"- 完整的盤點表已寫入 {rel(out, cfg.root)}（{len(rows)} 列）；分析時只查需要的列，不要整份讀進對話")
+    return "\n".join(lines) + "\n"
+
+
+def survey(cfg: Config, rows: list[dict] | None = None) -> str:
+    """盤點套件內所有模組，輸出 Markdown，作為分析報告的素材。"""
+    rows = survey_rows(cfg) if rows is None else rows
     out = [
         f"# AIR survey：{cfg.package}",
         "",
@@ -211,6 +235,8 @@ def status_data(cfg: Config) -> dict:
         "commit_check": install.commit_check_status(cfg.root),
         "hook_errors": len(hooklog.recent(cfg.root)),
         "hook_errors_text": hooklog.describe(cfg.root),
+        "usage": usage.summary(cfg.root),
+        "usage_text": usage.describe(cfg.root),
         "test_command": cfg.test_command,
         "last_verify": None if receipt is None else {
             "state": verify.receipt_state(cfg, receipt), "accepted": receipt["accepted"],
@@ -240,6 +266,7 @@ def status(cfg: Config) -> str:
         f"套件完整性：{integrity_line}",
         f"commit 前檢查：{d['commit_check']}",
         f"hook 錯誤（24 小時內）：{d['hook_errors_text']}",
+        f"成本指標（本機累計）：{d['usage_text']}",
         f"測試指令：{d['test_command'] or '（尚未設定）'}",
         f"最近驗收：{d['last_verify_text']}",
         f"語意審查：{d['last_review_text']}",

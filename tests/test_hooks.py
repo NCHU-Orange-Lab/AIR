@@ -37,6 +37,7 @@ class TestPostEdit(ProjectTestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("AIR001", r.stderr)
         self.assertIn("已經寫入檔案", r.stderr)
+        self.assertIn("post-edit 擋下 1 次", self.p.air("status").stdout)
 
     def test_clean_file(self):
         f = self.p.write("demo/steps/ok.py", "x = 1\n")
@@ -179,6 +180,26 @@ class TestStop(ProjectTestCase):
         r = self.p.air("hook", "stop", stdin=json.dumps({"stop_hook_active": False}))
         self.assertEqual(r.returncode, 2)
         self.assertIn("AIR001", r.stderr)
+
+    def test_stop_groups_same_violation(self):
+        self.p.write("demo/steps/b.py", BAD)
+        self.p.write("demo/steps/c.py", BAD)
+        r = self.p.air("hook", "stop", stdin="{}")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("AIR001 ×3：", r.stderr)
+        self.assertEqual(r.stderr.count("不能 print"), 1)
+        self.assertIn("Stop 擋下 1 次", self.p.air("status").stdout)
+
+    def test_stop_prints_at_most_ten_groups_and_writes_the_full_list(self):
+        mods = ["os", "sys", "requests", "random", "time", "logging", "pathlib", "shutil", "subprocess", "httpx", "io", "pprint"]
+        for m in mods:
+            self.p.write(f"demo/steps/u_{m}.py", f"import {m}\n")  # 12 種不同的修法提示，加上 setUp 的 AIR001 共 13 組
+        r = self.p.air("hook", "stop", stdin="{}")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("…另有 3 組（共 13 個違規），完整清單在 .air/last-check.json", r.stderr)
+        self.assertEqual(r.stderr.count("AIR002"), 9)
+        full = json.loads((self.p.root / ".air" / "last-check.json").read_text(encoding="utf-8"))
+        self.assertEqual((full["schema"], len(full["hard"])), ("air.check.v1", 13))
 
     def test_second_stop_lets_go_claude(self):
         r = self.p.air("hook", "stop", stdin=json.dumps({"stop_hook_active": True}))

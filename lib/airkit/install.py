@@ -134,7 +134,7 @@ def write_project_file(root: Path, package: str, package_dir: str) -> str:
     return "created"
 
 
-AIR_IGNORE = ["python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log"]  # 這台電腦的 Python 路徑與裝了哪些宿主、本機的驗收與審查紀錄、hook 的注入紀錄與錯誤紀錄：都不進版本控制
+AIR_IGNORE = ["python", "hosts", "verify.json", "review.json", "sessions", "hook-errors.log", "last-check.json", "metrics.jsonl"]  # 這台電腦的 Python 路徑與裝了哪些宿主、本機的驗收與審查紀錄、hook 的注入與錯誤紀錄、最近一次檢查、成本指標：都不進版本控制
 HOSTS_FILE = Path(".air") / "hosts"
 
 
