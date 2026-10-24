@@ -22,7 +22,7 @@ contracts/                     跨層的型別與介面
 
 ## 怎麼開始
 
-1. 取得套件：下載 [GitHub release](https://github.com/alenzenx/AIR/releases) 的原始碼並解壓（或 clone 之後刪掉 `.git`），把資料夾改名為 `AIR/`，放到專案根目錄（git repo 的根目錄）。開發 repo 的根目錄就是套件本身，沒有另一層 `AIR/`。**不要帶著 `.git`**（安裝程式會擋下）；`tests/`、`.github/` 可以不帶，隱藏檔 `.gitignore`、`.gitattributes` 要一起帶（列在 `MANIFEST.sha256` 裡）。
+1. 取得套件：下載 [GitHub release](https://github.com/NCHU-Orange-Lab/AIR/releases) 的原始碼並解壓（或 clone 之後刪掉 `.git`），把資料夾改名為 `AIR/`，放到專案根目錄（git repo 的根目錄）。開發 repo 的根目錄就是套件本身，沒有另一層 `AIR/`。**不要帶著 `.git`**（安裝程式會擋下）；`tests/`、`.github/` 可以不帶，隱藏檔 `.gitignore`、`.gitattributes` 要一起帶（列在 `MANIFEST.sha256` 裡）。
 2. 工作樹不用乾淨：安裝程式最後會列出它建立或修改的檔案，commit 時只加那些。其中有被專案的 `.gitignore` 忽略的（例如忽略了 `.claude/`），安裝程式與 `doctor` 會列出來；`AIR/` 自帶的 `.gitignore` 讓它不受 `lib/` 這類規則影響。
 3. 對 AI 說：**「照 AIR/START.md 安裝」**
 
