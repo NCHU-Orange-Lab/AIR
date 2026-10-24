@@ -20,21 +20,21 @@ import re
 import time
 from pathlib import Path
 
-from . import project
+from . import project, stages
 from .checks import layer_files
 from .config import KIT_DIR, Config
 from .hosts import Host
 from .rules import name_for as rule_name  # noqa: F401 — 哪個檔案適用哪份規則，跟語意審查共用同一個判斷
 
 SESSIONS_DIR = Path(".air") / "sessions"
-STAGE_OF_PHASE = {"installed": 2, "analyzed": 3, "planned": 4, "layered": 5, "migrating": 5}  # 這個階段該讀 START.md 的哪一節
+STAGE_OF_PHASE = stages.STAGE_OF_PHASE  # 這個階段該讀 AIR/start/ 的哪一份
 KEEP_DAYS = 7  # 超過這麼久沒動的注入紀錄，session 開始時順便清掉
 PHASE_GUIDE = {
-    "installed": "分析階段（AIR/START.md 階段 2）：只讀程式、寫遷移報告，不修改套件與測試目錄裡的 .py（會被擋下；exclude 的路徑與套件外的腳本不受限）。",
-    "analyzed": "計畫階段（AIR/START.md 階段 3）：在遷移報告寫計畫，不修改套件與測試目錄裡的 .py（會被擋下；exclude 的路徑與套件外的腳本不受限）。",
-    "planned": "建立分層（AIR/START.md 階段 4）：python3 AIR/air.py layers，然後 check、phase layered。",
-    "layered": "準備逐批遷移（AIR/START.md 階段 5）：第一批開始時執行 phase migrating。",
-    "migrating": "逐批遷移中（AIR/START.md 階段 5）：每批先補行為保護測試，verify 通過才 commit；每批結束停下來等核准。",
+    "installed": "分析階段（AIR/start/2-analyze.md）：只讀程式、寫遷移報告，不修改套件與測試目錄裡的 .py（會被擋下；exclude 的路徑與套件外的腳本不受限）。",
+    "analyzed": "計畫階段（AIR/start/3-plan.md）：在遷移報告寫計畫，不修改套件與測試目錄裡的 .py（會被擋下；exclude 的路徑與套件外的腳本不受限）。",
+    "planned": "建立分層（AIR/start/4-layers.md）：python3 AIR/air.py layers，然後 check、phase layered。",
+    "layered": "準備逐批遷移（AIR/start/5-migrate.md）：第一批開始時執行 phase migrating。",
+    "migrating": "逐批遷移中（AIR/start/5-migrate.md；批次都做完後是 AIR/start/6-finish.md）：每批先補行為保護測試，verify 通過才 commit；每批結束停下來等核准。",
     "done": "遷移完成：新程式一律寫進對應的層，改到哪一層就照那一層的規則。",
 }
 
@@ -152,10 +152,8 @@ def rules_to_inject(cfg: Config, session_id: str, paths) -> str:
 
 
 def stage_text(stage: int) -> str:
-    """START.md 裡「## 階段 N」那一節（到下一個 ## 或 --- 為止）。只附當下的階段：整份 START.md 近 4,000 字，5/6 跟當下無關。"""
-    text = (KIT_DIR / "START.md").read_text(encoding="utf-8")
-    m = re.search(rf"^## 階段 {stage}：.*?(?=^## |^---)", text, re.M | re.S)
-    return m.group(0).strip() if m else ""
+    """AIR/start/ 裡那一個階段的全文。只附當下的階段：六份合計約 5,800 字，其他五份跟當下無關。"""
+    return stages.text(stage)
 
 
 def session_context(cfg: Config, host: Host | None = None) -> str:
@@ -165,7 +163,7 @@ def session_context(cfg: Config, host: Host | None = None) -> str:
     else:
         how = "第一次修改某一層的檔案時，hook 會附上那一層的規則（AIR/rules/<層>.md）"
     pause = project.paused(cfg.root)
-    if pause is not None:  # 暫停中：不催該階段的事，也不附 START.md；新程式仍要寫進對應的層
+    if pause is not None:  # 暫停中：不催該階段的事，也不附階段的做法；新程式仍要寫進對應的層
         guide = (f"遷移暫停中（{project.describe_pause(pause)}；階段 {cfg.phase} 保留）：照一般開發進行，新程式仍寫進對應的層，"
                  "改到哪一層就照那一層的規則；分析／計畫階段的 .py 凍結已解除。要繼續遷移，由使用者執行 python3 AIR/air.py resume，不要自己執行。")
     else:
@@ -179,5 +177,5 @@ def session_context(cfg: Config, host: Host | None = None) -> str:
     stage = STAGE_OF_PHASE.get(cfg.phase) if pause is None else None
     section = stage_text(stage) if stage else ""
     if section:
-        lines += ["", f"【AIR/START.md 階段 {stage}（已附上這一節，不用再讀整份 START.md）】", section]
+        lines += ["", f"【{stages.shown(stage)}（階段 {stage} 的做法，已附上全文，不用再讀）】", section]
     return "\n".join(lines)

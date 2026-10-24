@@ -93,7 +93,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 指令 | 做什麼 |
 |---|---|
-| `python3 AIR/air.py status` | 本機時間、套件、遷移階段、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查；常駐內容到 80% 以上時多一行 |
+| `python3 AIR/air.py status` | 本機時間、套件、遷移階段與現在該讀的階段檔、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查；常駐內容到 80% 以上時多一行 |
 | `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查；常駐內容到 80% 以上也會列出 |
 | `python3 AIR/air.py doctor --context` | 常駐內容的完整盤點：各工具一開場載入的檔案（CLAUDE.md 鏈、沒有 `paths` 的規則、自動記憶索引、Codex 的 AGENTS.md 鏈）、大小、上限與佔比、AIR 區塊的位置 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
@@ -110,4 +110,4 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 - 規則、檢查、設定：[docs/規範說明.md](docs/規範說明.md)
 - 為什麼這樣設計：[docs/設計說明.md](docs/設計說明.md)
-- 給 AI 的安裝與遷移指引：[START.md](START.md)
+- 給 AI 的安裝與遷移指引：[START.md](START.md)（共通原則與目錄；每個階段的做法在 [start/](start/)，AI 只讀當下那一份）

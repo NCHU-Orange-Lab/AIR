@@ -29,7 +29,7 @@
 
 ## 遷移中
 
-`.air/project.toml` 的 `migration.phase` 不是 `done` 時正在遷移：照 `AIR/START.md`（skill `air-migrate`）一次只做一個階段，做完停下來等使用者核准；有 hook 的工具在 session 開始時會附上當下階段的做法。遷移暫停中（`status` 會顯示）就照一般開發，不要自己 `resume`。
+`.air/project.toml` 的 `migration.phase` 不是 `done` 時正在遷移：只讀 `status` 指出的那份 `AIR/start/` 階段檔（skill `air-migrate`），一次只做一個階段，做完停下來等使用者核准。遷移暫停中（`status` 會顯示）就照一般開發，不要自己 `resume`。
 
 ## 指令
 

@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import batch, budget, golden, hooklog, install, legacy, review, usage, verify
+from . import batch, budget, golden, hooklog, install, legacy, review, stages, usage, verify
 from . import history as _history
 from .history import HISTORY_FILE
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source, rel
@@ -370,6 +370,7 @@ def status_data(cfg: Config) -> dict:
     reviewed = review.load_record(cfg.root)
     index = PHASES.index(cfg.phase) if cfg.phase in PHASES else -1
     pause_entry = paused(cfg.root)
+    stage = stages.for_phase(cfg.phase) if pause_entry is None else None
     return {
         "schema": "air.status.v1",
         "time": local_time(),
@@ -377,6 +378,7 @@ def status_data(cfg: Config) -> dict:
         "package_dir": cfg.package_dir.relative_to(cfg.root).as_posix(),
         "phase": cfg.phase,
         "next_phase": PHASES[index + 1] if 0 <= index < len(PHASES) - 1 else None,
+        "guide": stages.shown(stage) if stage else None,  # 現在該讀的那一份階段檔；暫停中與 done 沒有
         "paused": None if pause_entry is None else {k: pause_entry[k] for k in ("time", "phase", "reason")},
         "exclude": list(cfg.exclude),
         "paused_text": None if pause_entry is None else describe_pause(pause_entry),
@@ -426,6 +428,7 @@ def status(cfg: Config) -> str:
         f"本機時間：{d['time']}",
         f"套件：{d['package']}（{d['package_dir']}）",
         f"遷移階段：{d['phase']}（{' → '.join(PHASES)}）",
+        *([f"現在讀：{d['guide']}（只讀這一份，其他階段不用讀）"] if d["guide"] else []),
         *([f"遷移暫停中：{d['paused_text']}（python3 AIR/air.py resume 繼續；暫停期間照一般開發，架構檢查照常）"] if d["paused"] else []),
         f"分支：{d['branch']}（本機紀錄在 {d['records_dir']}/）",
         f"已建立的層：{'、'.join(d['layers']) or '無'}",

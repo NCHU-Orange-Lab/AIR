@@ -171,7 +171,7 @@ class TestSessionStart(ProjectTestCase):
     def test_current_stage_of_start_md_is_injected_instead_of_the_whole_file(self):
         from airkit import project
         text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("【AIR/START.md 階段 2（已附上這一節，不用再讀整份 START.md）】", text)
+        self.assertIn("【AIR/start/2-analyze.md（階段 2 的做法，已附上全文，不用再讀）】", text)
         self.assertIn("survey", text)
         self.assertNotIn("## 階段 3", text)
         self.assertNotIn("## 階段 1", text)
@@ -181,7 +181,8 @@ class TestSessionStart(ProjectTestCase):
         self.assertIn("補行為保護測試", text)
         project.set_phase(self.p.cfg(), "done")
         text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertNotIn("【AIR/START.md", text)
+        self.assertNotIn("【AIR/start/", text)
+        self.assertNotIn("現在讀：", text)
         self.assertEqual(context.stage_text(9), "")
 
     def test_paused_replaces_the_phase_guidance_and_skips_start_md(self):
@@ -194,11 +195,12 @@ class TestSessionStart(ProjectTestCase):
         self.assertIn("不要自己執行", text)
         self.assertIn("新程式仍寫進對應的層", text)
         self.assertNotIn("不修改套件與測試目錄裡的 .py（會被擋下", text)  # 不再催分析階段的事
-        self.assertNotIn("【AIR/START.md", text)       # 也不附那一節
+        self.assertNotIn("【AIR/start/", text)       # 也不附那一份
+        self.assertNotIn("現在讀：", text)
         project.resume(self.p.cfg())
         text = json.loads(self.p.hook("session-start", {"session_id": "s1"}).stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("分析階段", text)
-        self.assertIn("【AIR/START.md 階段 2", text)
+        self.assertIn("【AIR/start/2-analyze.md", text)
 
     def test_guidance_follows_phase(self):
         from airkit import project
