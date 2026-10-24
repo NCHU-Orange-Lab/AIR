@@ -11,7 +11,8 @@
   [tests.final] 收尾（verify --scope final）跑的套件：command、timeout、results；沒設就用 [tests]
   [[tests.golden]] 黃金重播：name、command、outputs（指令寫出的檔案）、timeout、scope（batch／final，預設兩者）；
                golden record 記下輸出的 sha256 到 .air/golden.json（進版本控制），verify 重跑比對
-  [verify]     fingerprint-extra：驗收指紋除了套件、tests、設定之外還要看的路徑
+  [verify]     fingerprint-extra：驗收指紋除了套件、tests、設定之外還要看的路徑；
+               legacy-alerting：warn（預設，只提醒）｜error（批次驗收不通過）｜none——allow-legacy 過期、層外新增有邏輯的檔案
   [hooks]      stop-scope：session（預設；結束前只查這個 session 動過的檔案）或 all（整個專案）
 exclude 與 fingerprint-extra 都是「相對專案根目錄的目錄或檔案」，可以寫成 dir/**（意思一樣），不支援其他萬用字元。
 """
@@ -95,6 +96,7 @@ class Config:
     exclude: tuple[str, ...] = ()           # migration.exclude：相對根目錄的 posix 路徑，沒有結尾斜線
     fingerprint_extra: tuple[str, ...] = () # verify.fingerprint-extra：同上
     stop_scope: str = "session"             # hooks.stop-scope：session | all
+    legacy_alerting: str = "warn"           # verify.legacy-alerting：warn（只提醒）| error（批次驗收不通過）| none
     old_test_keys: tuple[str, ...] = ()     # 還在用 project.test-command／test-timeout（doctor 提醒搬到 [tests]）
     test_results: str = ""                  # tests.results
     test_baseline: str = DEFAULT_BASELINE   # tests.baseline
@@ -122,6 +124,7 @@ class Config:
 
 
 STOP_SCOPES = ("session", "all")
+ALERTING = ("warn", "error", "none")
 
 
 def _paths(values, field: str) -> tuple[str, ...]:
@@ -191,6 +194,9 @@ def build(kit: dict, project: dict, root: Path) -> Config:
     stop_scope = project.get("hooks", {}).get("stop-scope", "session")
     if stop_scope not in STOP_SCOPES:
         raise ConfigError(f".air/project.toml 的 hooks.stop-scope 只能是 {'、'.join(STOP_SCOPES)}，不是：{stop_scope!r}")
+    alerting = project.get("verify", {}).get("legacy-alerting", "warn")
+    if alerting not in ALERTING:
+        raise ConfigError(f".air/project.toml 的 verify.legacy-alerting 只能是 {'、'.join(ALERTING)}，不是：{alerting!r}")
     package_dir = root / proj.get("package-dir", package)
     tests_dir = root / proj.get("tests-dir", "tests")
     if package_dir.resolve().is_relative_to(tests_dir.resolve()):
@@ -236,6 +242,7 @@ def build(kit: dict, project: dict, root: Path) -> Config:
         exclude=_paths(migration.get("exclude", []), "migration.exclude"),
         fingerprint_extra=_paths(project.get("verify", {}).get("fingerprint-extra", []), "verify.fingerprint-extra"),
         stop_scope=stop_scope,
+        legacy_alerting=alerting,
         old_test_keys=tuple(k for k in ("test-command", "test-timeout") if k in proj),
         test_results=_relpath(tests["results"], "tests.results") if "results" in tests else "",
         test_baseline=_relpath(tests["baseline"], "tests.baseline") if "baseline" in tests else DEFAULT_BASELINE,

@@ -58,6 +58,9 @@ timeout = 600                   # 上限（秒）
 # [verify]
 # 驗收指紋除了套件目錄、測試目錄、這個檔案與 AIR 之外，還要看的路徑（改了就讓驗收過期）
 # fingerprint-extra = ["conftest.py", "pyproject.toml"]
+# 批次驗收的兩個提醒怎麼處理：allow-legacy 裡已經沒有 import 用到的條目、起點之後層外新增有自己程式的檔案。
+# warn（預設）只提醒、error 讓批次驗收不通過、none 不顯示
+# legacy-alerting = "warn"
 
 # [hooks]
 # 結束前的檢查範圍：session（預設）只查這個 session 動過的檔案（編輯工具記下的，加上 session 開始後內容變了的層內 .py），

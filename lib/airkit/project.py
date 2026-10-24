@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import batch, budget, golden, hooklog, install, legacy, review, usage, verify
+from . import history as _history
+from .history import HISTORY_FILE
 from .checks import Violation, call_violations, check, classify, layer_of, module_of, read_source, rel
 from .config import KIT_DIR, PROJECT_FILE, REPORT_FILE, Config
 from .pyast import import_targets, matches
@@ -21,7 +23,6 @@ STDLIB_IO = {"os", "io", "pathlib", "shutil", "sys", "subprocess", "socket", "lo
              "threading", "multiprocessing", "asyncio", "shelve", "dbm", "fileinput", "smtplib", "ftplib", "webbrowser"}
 
 PHASES = ["installed", "analyzed", "planned", "layered", "migrating", "done"]
-HISTORY_FILE = Path(".air") / "history.jsonl"  # 每次階段轉移一行：時間、從哪到哪、commit、方式、原因
 PAUSE_FILE = Path(".air") / "paused.json"      # 遷移暫停中：跟階段一樣屬於專案，進版本控制
 PAUSE_SCHEMA = "air.paused.v1"
 
@@ -258,11 +259,7 @@ def record(root: Path, entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def history(root: Path) -> list[dict]:
-    path = root / HISTORY_FILE
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+history = _history.load  # 讀取在 history.py（verify 也要用，放這裡會循環）
 
 
 def _module_facts(file: Path, cfg: Config) -> dict:
@@ -391,6 +388,7 @@ def status_data(cfg: Config) -> dict:
         "legacy_modules": len(report.legacy),
         "legacy_kinds": legacy.counts(report.legacy),  # logic（有自己的程式）／shim（轉接檔）／marker（套件標記）
         "allow_legacy": len(cfg.allow_legacy),
+        "allow_legacy_stale": 0 if cfg.legacy_alerting == "none" or not cfg.allow_legacy else len(legacy.stale_allowances(cfg)),
         "violations": len(report.hard),
         "warnings": len(report.soft),
         "integrity": [v.format(cfg.root) for v in report.hard if v.code == "AIR009"],
@@ -433,7 +431,7 @@ def status(cfg: Config) -> str:
         f"已建立的層：{'、'.join(d['layers']) or '無'}",
         f"檢查範圍：層內 {d['checked_files']} 個檔案；舊程式碼模組 {d['legacy_modules']} 個（不檢查；{legacy.describe(d['legacy_kinds'])}）",
         *([f"不歸 AIR 管的路徑（migration.exclude）：{'、'.join(d['exclude'])}"] if d["exclude"] else []),
-        f"暫時允許的舊模組 import：{d['allow_legacy']}",
+        f"暫時允許的舊模組 import：{d['allow_legacy']}" + (f"（其中 {d['allow_legacy_stale']} 筆已經不需要）" if d["allow_legacy_stale"] else ""),
         f"違規：{d['violations']}　提醒：{d['warnings']}",
         f"套件完整性：{integrity_line}",
         f"commit 前檢查：{d['commit_check']}",

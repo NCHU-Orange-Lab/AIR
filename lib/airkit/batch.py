@@ -10,12 +10,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import legacy, project, review, usage, verify
+from . import history, legacy, project, review, usage, verify
 from .checks import check, layer_of, rel
 from .config import KIT_DIR, Config
 
-HOW = "batch"  # history.jsonl 的 how
-TRANSITIONS = ("normal", "forced", "rollback")  # 真正的階段轉移；pause／resume 的紀錄 to 也是 migrating，不算起點
+HOW = history.BATCH  # history.jsonl 的 how
+TRANSITIONS = history.TRANSITIONS
+window_start = history.window_start  # 搬到 history.py：verify 也要用
 
 
 class BatchError(ValueError):
@@ -33,19 +34,7 @@ def _when(value: str | None) -> datetime | None:
 
 
 def batches(root: Path) -> list[dict]:
-    return [e for e in project.history(root) if e.get("how") == HOW]
-
-
-def window_start(root: Path) -> tuple[str | None, str | None]:
-    """這一批的起點 (時間, HEAD)：上一批結束時；沒有上一批就是進入 migrating 那次轉移；都沒有就 (None, None)（算全部）。"""
-    hist = project.history(root)
-    for e in reversed(hist):
-        if e.get("how") == HOW:
-            return e.get("time"), e.get("head")
-    for e in reversed(hist):
-        if e.get("to") == "migrating" and e.get("how") in TRANSITIONS:
-            return e.get("time"), e.get("head")
-    return None, None
+    return [e for e in history.load(root) if e.get("how") == HOW]
 
 
 def metrics_between(root: Path, since: str | None) -> dict:
@@ -124,7 +113,13 @@ def close(cfg: Config, note: str = "", ack: str = "") -> tuple[dict, list[str]]:
     elif state == "stale":
         warnings.append("語意審查紀錄已過期：" + review.describe(cfg, rec))
     since_time, since_head = window_start(cfg.root)
-    left = legacy.counts(check(cfg).legacy)
+    report = check(cfg)
+    left = legacy.counts(report.legacy)
+    alerts = {c["name"]: c for c in verify.legacy_alerts(cfg, report)}
+    stale, grown = alerts.get("allow-legacy-stale"), alerts.get("legacy-growth")
+    for c in (stale, grown):
+        if c and c["status"] == "fail":
+            warnings.append(c["detail"])
     entry = {
         "time": verify.now(), "from": cfg.phase, "to": cfg.phase, "head": verify.git(cfg.root, "rev-parse", "HEAD"), "how": HOW,
         "n": len(batches(cfg.root)) + 1, "note": note.strip() or None, "air": (KIT_DIR / "VERSION").read_text(encoding="utf-8").strip(),
@@ -132,6 +127,8 @@ def close(cfg: Config, note: str = "", ack: str = "") -> tuple[dict, list[str]]:
         "metrics": metrics_between(cfg.root, since_time),
         "git": git_stats(cfg, since_head),
         "legacy_remaining": left[legacy.LOGIC], "legacy_shims": left[legacy.SHIM], "legacy_markers": left[legacy.MARKER],
+        "allow_stale": len(stale["items"]) if stale else None,
+        "legacy_new": len(grown["items"]) if grown and grown["detail"] != verify.NO_BASELINE else None,
         "review": state, "review_blocking": len(open_p) if rec else None, "ack": acked,
     }
     project.record(cfg.root, entry)
