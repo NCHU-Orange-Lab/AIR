@@ -440,6 +440,79 @@ class TestFullInstall(ProjectTestCase):
         self.assertEqual(self.p.air("check").returncode, 0)  # 移除後不會因為接點不在而報 AIR009
 
 
+class TestVersionControl(ProjectTestCase):
+    """安裝要進版本控制的檔案不能被專案的 .gitignore 吃掉。2026-10-25 試跑：yolov5 的 .gitignore（GitHub 的 Python 範本）有 lib/，
+    安裝的 commit 完全沒有 AIR/lib，clone 或開 git worktree 之後找不到 airkit，主目錄卻一切正常。"""
+    git = True
+
+    def tracked(self) -> list[str]:
+        return [f for f in subprocess.run(["git", "ls-files", "-z"], cwd=self.p.root, capture_output=True, text=True, encoding="utf-8", check=True).stdout.split("\0") if f]
+
+    def doctor_item(self):
+        from airkit import doctor
+        return next(i for i in doctor.diagnose(self.p.root) if i.area == "版本控制")
+
+    def test_kit_gitignore_keeps_lib_and_docs_in_but_caches_out(self):
+        self.p.write(".gitignore", "lib/\ndocs/\nREADME.md\n")
+        self.p.write("AIR/lib/airkit/__pycache__/x.cpython-311.pyc", b"x")
+        r = self.p.air("install")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("被專案的 .gitignore 忽略", r.stdout)
+        self.p.commit("安裝 AIR 規範")
+        files = self.tracked()
+        for f in ("AIR/lib/airkit/install.py", "AIR/README.md", "AIR/docs/規範說明.md", "AIR/.gitignore"):
+            self.assertIn(f, files)
+        self.assertFalse([f for f in files if "__pycache__" in f or f.endswith(".pyc")])
+        self.assertEqual(self.doctor_item().text, "AIR/ 與接點都已進版本控制")
+
+    def test_ignored_hook_files_are_reported_by_install_and_doctor(self):
+        self.p.write(".gitignore", ".claude/\n")
+        r = self.p.air("install")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = next(l for l in r.stdout.splitlines() if "被專案的 .gitignore 忽略" in l)
+        self.assertIn(".claude/settings.json、.claude/skills/（", line)
+        self.assertIn(".claude/rules/（7 個檔案）", line)
+        self.assertIn("git check-ignore -v", line)
+        self.assertNotIn(".agents", line)
+        item = self.doctor_item()
+        self.assertEqual(item.level, "fail")
+        self.assertIn("被 .gitignore 忽略，不會被 commit：.claude/settings.json", item.text)
+
+    def test_ignoring_the_whole_kit_cannot_be_undone_from_inside_and_is_reported(self):
+        self.p.write(".gitignore", "AIR/\n")
+        self.p.air("install")
+        item = self.doctor_item()
+        self.assertEqual(item.level, "fail")
+        self.assertIn("被 .gitignore 忽略，不會被 commit：AIR/（", item.text)  # 整個 AIR/ 只列一組，不是十幾個子目錄
+
+    def test_ignored_guides_are_reported_too(self):
+        self.p.write(".gitignore", "*.md\n")  # 指引與 skill 也會被吃掉；AIR/ 裡的 .md 由套件自己的 .gitignore 救回來
+        line = next(l for l in self.p.air("install").stdout.splitlines() if "被專案的 .gitignore 忽略" in l)
+        self.assertIn("CLAUDE.md、AGENTS.md、", line)
+        self.assertNotIn("AIR/", line)
+
+    def test_force_added_files_are_not_ignored_and_uncommitted_ones_are_a_note(self):
+        self.p.write(".gitignore", ".claude/\n")
+        self.p.air("install")
+        item = self.doctor_item()
+        self.assertEqual(item.level, "fail")
+        subprocess.run(["git", "add", "-f", ".claude"], cwd=self.p.root, check=True)
+        item = self.doctor_item()
+        self.assertEqual(item.level, "warn")  # .claude 已追蹤，剩下的還沒 commit
+        self.assertIn("還沒 commit", item.text)
+        self.assertNotIn(".claude", item.text)
+        self.p.commit("安裝 AIR 規範")
+        self.assertEqual(self.doctor_item().level, "ok")
+
+
+class TestVersionControlWithoutGit(ProjectTestCase):
+    def test_no_git_no_item(self):
+        from airkit import doctor
+        self.p.air("install")
+        self.assertNotIn("版本控制", {i.area for i in doctor.diagnose(self.p.root)})
+        self.assertEqual(install.unversioned(self.p.root, ["AIR"]), ([], []))
+
+
 class TestLegacyRuleFiles(ProjectTestCase):
     git = True
 

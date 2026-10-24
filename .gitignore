@@ -1,3 +1,6 @@
+# 這份也是專案裡的 AIR/.gitignore。第一行讓 AIR/ 底下的檔案都進版本控制，不受專案 .gitignore 影響（子目錄的 .gitignore 優先）：
+# GitHub 的 Python 範本有 lib/，會讓 AIR/lib 沒被 commit，clone 或開 git worktree 之後就找不到 airkit（2026-10-25 試跑，yolov5）
+!*
 # Python 執行時產生的快取
 __pycache__/
 *.py[cod]

@@ -1,5 +1,5 @@
 """air doctor：診斷接線。Python、設定、套件完整性、指引、每個宿主的 hook、skill 與路徑規則（含真的跑一次的冒煙測試）、
-舊版留下的檔案、commit 前檢查、最近的 hook 錯誤、常駐內容的預算（--context 印完整表；沒加也列出到 80% 以上的）。
+舊版留下的檔案、commit 前檢查、AIR 與接點有沒有進版本控制、最近的 hook 錯誤、常駐內容的預算（--context 印完整表；沒加也列出到 80% 以上的）。
 
 只讀，不修改任何東西；修法都是明確的指令（多半是 sh AIR/install.sh）。
 """
@@ -224,6 +224,18 @@ def _smoke(root: Path, host: hosts.Host) -> list[Item]:
     return items
 
 
+def _versioned(root: Path) -> Item | None:
+    """AIR/ 與接點要進版本控制：被 .gitignore 忽略是問題（別人 clone 或開 worktree 後 AIR 無法執行，這裡卻一切正常），還沒 commit 是注意。"""
+    if install.git_toplevel(root) is None:
+        return None
+    ignored, untracked = install.unversioned(root, install.commit_paths(root, list(hosts.HOSTS.values())))
+    if ignored:
+        return Item(FAIL, "版本控制", f"{len(ignored)} 個 AIR 的檔案被 .gitignore 忽略，不會被 commit：{install.summarize_files(ignored)}。{install.IGNORED_FIX}")
+    if untracked:
+        return Item(WARN, "版本控制", f"{len(untracked)} 個 AIR 的檔案還沒 commit：{install.summarize_files(untracked)}。安裝或更新 AIR 之後要 commit 安裝程式列出的路徑，別人 clone 下來才有")
+    return Item(OK, "版本控制", "AIR/ 與接點都已進版本控制")
+
+
 def _hook_errors(root: Path) -> list[Item]:
     items = hooklog.recent(root)
     if not items:
@@ -306,6 +318,7 @@ def diagnose(root: Path) -> list[Item]:
             items += _smoke(root, host)
     items += _stale_rules(root, cfg)
     items.append(_commit_check(root))
+    items += [i for i in [_versioned(root)] if i]
     items += _hook_errors(root)
     items.append(_hooks_fired(root))
     items += _packaging(cfg)

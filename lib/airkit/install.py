@@ -551,6 +551,51 @@ def commit_paths(root: Path, selected: list[hosts.Host]) -> list[str]:
     return out
 
 
+SKIP_PARTS = {"__pycache__", ".pytest_cache"}
+IGNORED_FIX = ("用 git check-ignore -v <檔案> 找出是 .gitignore 的哪一行，在專案的 .gitignore 加上例外（例如 !.claude/）或拿掉那一行，"
+               "或 commit 時用 git add -f；不然 clone 或開 git worktree 之後就沒有這些檔案，AIR 或它的 hook 無法運作")
+
+
+def commit_files(root: Path, paths: list[str]) -> list[str]:
+    """commit_paths 展開成檔案（相對路徑），快取不算。"""
+    out = []
+    for rel in paths:
+        p = root / rel
+        found = [p] if p.is_file() else sorted(f for f in p.rglob("*") if f.is_file()) if p.is_dir() else []
+        out += [f.relative_to(root).as_posix() for f in found if not SKIP_PARTS & set(f.relative_to(root).parts) and f.suffix != ".pyc"]
+    return out
+
+
+def unversioned(root: Path, paths: list[str]) -> tuple[list[str], list[str]]:
+    """(被 .gitignore 忽略的, 還沒 commit 的)：安裝要進版本控制的檔案裡，git 不會收或還沒收的。不是 git repo 時兩個都是空的。
+    已經追蹤的檔案不算忽略（git check-ignore 不回報）。"""
+    if git_toplevel(root) is None:
+        return [], []
+    files = commit_files(root, paths)
+    if not files:
+        return [], []
+    run = lambda *args, data="": subprocess.run(["git", *args], cwd=root, input=data, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = run("check-ignore", "--stdin", "-z", data="\0".join(files) + "\0")
+    ignored = [f for f in r.stdout.split("\0") if f] if r.returncode == 0 else []
+    r = run("ls-files", "--others", "--exclude-standard", "-z", "--", *paths)
+    untracked = [f for f in r.stdout.split("\0") if f and f in set(files)] if r.returncode == 0 else []
+    return ignored, untracked
+
+
+def summarize_files(files: list[str], limit: int = 6) -> str:
+    """依前兩層目錄分組：AIR/lib/（28 個檔案）、.claude/settings.json；組數太多（整個 AIR/ 被忽略）就只看第一層：AIR/（78 個檔案）。"""
+    for depth in (2, 1):
+        groups: dict[str, int] = {}
+        for f in files:
+            parts = f.split("/")
+            key = "/".join(parts[:depth]) + ("/" if len(parts) > depth else "")
+            groups[key] = groups.get(key, 0) + 1
+        if len(groups) <= limit:
+            break
+    shown = [f"{k}（{n} 個檔案）" if k.endswith("/") else k for k, n in list(groups.items())[:limit]]
+    return "、".join(shown) + (f"…等 {len(groups)} 處" if len(groups) > limit else "")
+
+
 def _skill_lines(root: Path, host: hosts.Host) -> list[str]:
     installed, skipped = ensure_skills(root, host)
     return ([f"{host.skills_dir.as_posix()}/：{'、'.join(installed)}"] if installed else []) + skipped
@@ -590,7 +635,11 @@ def install(root: Path, package: str | None, package_dir: str | None, host_names
             lines += run()
         except (OSError, ValueError, ConfigError) as e:
             lines.append(f"{FAILED}{label}：{describe_error(e)}")
-    lines.append("commit 時只加這些（工作樹不用先清乾淨，其他未提交的檔案照舊）：" + " ".join(commit_paths(root, selected)))
+    paths = commit_paths(root, selected)
+    lines.append("commit 時只加這些（工作樹不用先清乾淨，其他未提交的檔案照舊）：" + " ".join(paths))
+    ignored, _ = unversioned(root, paths)
+    if ignored:
+        lines.append(f"注意：{len(ignored)} 個要進版本控制的檔案被專案的 .gitignore 忽略，git add 不會收：{summarize_files(ignored)}。{IGNORED_FIX}")
     return lines
 
 
