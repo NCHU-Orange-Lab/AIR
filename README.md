@@ -34,7 +34,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 2. 分析 | 盤點所有模組、決定不歸 AIR 管的路徑、確認測試指令並記下既有失敗、寫出每個模組該歸到哪一層 | 審閱 `docs/AIR-遷移報告.md` 的分析 |
 | 3. 計畫 | 把遷移切成數個批次 | 核准計畫 |
 | 4. 建立分層 | 建立空的各層目錄與規則；專案已有同名模組（例如 `main.py`）時採用它當那一層；確認 wheel 的 `packages` 清單；`verify` 通過 | 核准（含 `main.py` 引入的 allow-legacy） |
-| 5. 逐批遷移 | 每一批：先補行為保護測試（或黃金重播已涵蓋）→ 搬移 → `verify`（測試＋架構檢查＋重播）通過 → 語意審查（`air-review`）→ commit → `batch close` 記下這批的指標 | 每批結束時核准下一批 |
+| 5. 逐批遷移 | 每一批：先補行為保護測試（或黃金重播已涵蓋）→ 搬移 → `verify`（測試＋架構檢查＋重播）通過 → 語意審查（`air-review`）→ `batch finish`（沿用或重跑驗收、交回審查結果、記下這批的指標）→ commit | 每批結束時核准下一批 |
 | 6. 收尾 | 移除過渡用的轉接，`verify --scope final` 通過 | 確認完成 |
 
 遷移期間，還沒搬進任何層的程式屬於「舊程式碼」，不受檢查，專案可以照常運作。不打算遷移的實驗區、腳本、筆記本，經你同意寫進 `.air/project.toml` 的 `migration.exclude`：它們不凍結、不進驗收指紋、不列進盤點，留在外面算正式的結局。分析、計畫階段的程式凍結只涵蓋套件目錄與測試目錄。
@@ -74,6 +74,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.air/sessions/` | 每個 session 的紀錄：已附過哪一層的規則（Codex）、編輯工具動過的檔案、開始時各層檔案的快照（結束前的檢查用） | 否 |
 | `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
 | `.air/metrics.jsonl` | 成本的代理指標：verify 幾次、審查範圍印了多少字、擋下幾次；`status` 顯示累計 | 否 |
+| `.air/out/` | 超過輸出上限（`[output] max-chars`，預設 4,000 字）的指令輸出全文；畫面只印開頭與檔案位置 | 否 |
 | `.air/branches/<分支>/` | 這個分支的本機紀錄：`verify.json`（最近一次驗收，綁定當時的程式碼）、`review.json`（最近一次語意審查，每個檔案一筆）、`last-check.json`（結束前的檢查有違規時的完整清單）；切分支不會互相覆蓋 | 否 |
 | `docs/AIR-遷移報告.md` | AI 寫的分析、計畫與進度 | 是 |
 | commit 前檢查 | 有用 pre-commit 就加進 `.pre-commit-config.yaml`；沒有就裝 `.git/hooks/pre-commit` | `.git/hooks` 不進版本控制 |
@@ -89,7 +90,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 ## 常用指令
 
-一條指令一列（不放在同一個可執行的區塊裡：有些工具會把整個區塊一次執行）。
+一條指令一列（不放在同一個可執行的區塊裡：有些工具會把整個區塊一次執行）。輸出超過 `.air/project.toml` 的 `[output] max-chars`（預設 4,000 字）時，完整內容寫進 `.air/out/<指令>.txt`，畫面只印開頭（`--json` 不截）。
 
 | 指令 | 做什麼 |
 |---|---|
@@ -100,9 +101,9 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查＋黃金重播，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試）。`[tests]` 有設 `results` 時，失敗都在既有失敗基準裡就算通過 |
 | `python3 AIR/air.py verify --record-baseline` | 跑測試，把目前失敗的測試記成基準（`.air/test-baseline.json`）；分析階段做一次 |
 | `python3 AIR/air.py golden record` | 跑黃金重播的指令，記下輸出檔的 sha256（`.air/golden.json`）；行為真的要改才重錄，由你決定 |
-| `python3 AIR/air.py batch close --note "第 N 批：…"` | 每批 commit 之後：把這批的代理指標（搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）記進 `.air/history.jsonl`；要先通過驗收；審查紀錄還有沒處理的 P1 時要經使用者同意後加 `--ack "理由"` |
+| `python3 AIR/air.py batch finish --note "第 N 批：…" --review -` | 每批 commit 之前，一個指令做完收尾：驗收紀錄與目前程式碼一致就沿用、否則重跑 `verify`；驗證並記錄審查結果（stdin 的 JSON）；把這批的代理指標（搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）記進 `.air/history.jsonl`；印出 commit 指令（history.jsonl 跟這一批一起 commit）。審查還有沒處理的 P1 時要經使用者同意後加 `--ack "理由"`；舊的 `batch close`（commit 之後）仍可用 |
 | `python3 AIR/air.py batch list` | 列出每一批的指標，改版前後可以比較 |
-| `python3 AIR/air.py review --bundle` | 語意審查的範圍：每層要對照的規則（只列一次）、這次改到的檔案，加上每個待審檔案的差異（一次拿齊）；審過沒變的檔案沿用，只有改過的要重審（`--result` 交回結果） |
+| `python3 AIR/air.py review --bundle` | 語意審查的範圍：每層要對照的規則（只列一次）、這次改到的檔案，加上每個待審檔案的差異（一次拿齊；搬移過來的檔案只附搬自哪裡、對舊路徑的差異與大綱，`--full` 全文）；審過沒變的檔案沿用，只有改過的要重審（`--result` 或 `batch finish --review` 交回結果） |
 | `python3 AIR/air.py survey --out docs/air-survey.md` | 盤點現有程式碼：完整表寫進檔案，畫面只印摘要 |
 | `python3 AIR/air.py pause --reason <原因>` | 暫停遷移（階段保留、分析／計畫階段的 `.py` 凍結解除、session 開始改附「暫停中」）；`resume` 繼續 |
 

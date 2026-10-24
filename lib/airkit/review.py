@@ -13,12 +13,13 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import rules, verify
+from . import rules, usage, verify
 from .checks import rel
 from .config import Config
 
@@ -34,6 +35,7 @@ FINDING_KEYS = ("rule", "title", "body", "confidence", "priority", "path", "line
 OVERALL = ("pass", "fail")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
 STATUS = {"added": "新增", "modified": "修改", "untracked": "新檔案"}
+OUTLINE_LINE = 160     # 大綱裡每一行最多印這麼多字
 
 
 class ReviewError(ValueError):
@@ -155,18 +157,92 @@ def scope(cfg: Config, base: str | None = None) -> dict:
     }
 
 
-def bundle(cfg: Config, sc: dict) -> dict:
+def moves(cfg: Config, ref: str | None) -> dict[str, tuple[str, int]]:
+    """這次變更裡搬移過來的檔案：新路徑 → (舊路徑, 相似度 %)。git 認得的改名與複製（git mv、git add 過的搬移；
+    舊路徑留著轉接檔時 git 看到的是「複製＋舊檔修改」，所以用 -C），加上沒有 git add 的搬移：還沒追蹤的新檔，
+    內容與 ref 裡某個這次刪除或修改了的檔案完全相同。"""
+    if ref is None:
+        return {}
+    root = cfg.root
+    out: dict[str, tuple[str, int]] = {}
+    items = (verify.git(root, "diff", "--relative", "-C", "--name-status", "-z", ref) or "").split("\0")
+    i, sources = 0, []
+    while i < len(items) and items[i]:
+        status = items[i]
+        if status[:1] in ("R", "C"):
+            out[items[i + 2]] = (items[i + 1], int(status[1:] or 100))
+            i += 3
+            continue
+        if status[:1] in ("D", "M"):
+            sources.append(items[i + 1])
+        i += 2
+    if sources:
+        by_blob = {}
+        for name in sources:
+            blob = verify.git(root, "rev-parse", f"{ref}:./{name}")
+            if blob:
+                by_blob[blob] = name
+        for name in (verify.git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0"):
+            if name and name not in out and (blob := verify.git(root, "hash-object", "--", name)) in by_blob:
+                out[name] = (by_blob[blob], 100)
+    return out
+
+
+def outline(text: str) -> list[str]:
+    """檔案的骨架（給搬移過來的檔案用）：import、模組層級的敘述、def／class 的簽名與行號範圍，方法縮排列在 class 底下。
+    import 時就執行的敘述（設定 log、下載）照樣列出：那是 ADP-3 這類規則要看的。解析不了就回傳空清單（呼叫端改附全文）。"""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    lines = text.splitlines()
+
+    def head(node: ast.AST, indent: str) -> str:
+        first = lines[node.lineno - 1].strip()
+        if len(first) > OUTLINE_LINE:
+            first = first[:OUTLINE_LINE] + "…"
+        span = f"{node.lineno}" if node.end_lineno == node.lineno else f"{node.lineno}–{node.end_lineno}"
+        return f"{span:>9}│{indent}{first}"
+
+    out = []
+    for node in tree.body:
+        out.append(head(node, ""))
+        if isinstance(node, ast.ClassDef):
+            out += [head(n, "    ") for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    return out
+
+
+def _numbered(text: str) -> str:
+    return "\n".join(f"{i:4d}│{line}" for i, line in enumerate(text.splitlines(), 1))
+
+
+def bundle(cfg: Config, sc: dict, full: bool = False) -> dict:
     """把每個待審檔案的差異附進範圍（files[i]["diff"]）：改過的檔案是相對 ref 的 git diff，新檔案是整個內容加行號。
 
     一次拿齊，審查者（自己或子 agent）不用再逐檔跑 git diff、讀檔；交給子 agent 時整段貼給它，它就不用重跑 review。
     沿用的檔案不附（本來就不必重審）。
+    搬移過來的檔案（moves）不重印全文：附上「搬自哪裡、相似度」、對舊路徑的差異（內容沒變就是空的）與大綱（outline）。
+    試跑（nanoGPT）：model.py 搬進 adapters，--bundle 把 330 行整份印出（19,482 字）；Claude 用 head 截掉、等於沒看完就審，
+    Codex 整份讀進對話。搬移的檔案內容 AI 剛剛才處理過，要的是「改了什麼」與「現在要對照哪些規則」。full=True 照舊附全文。
     """
+    moved = {} if full else moves(cfg, sc["ref"])
     for f in sc["files"]:
         if f["reused"]:
             continue
-        if f["status"] == "untracked" or sc["ref"] is None:
-            text = (cfg.root / f["path"]).read_text(encoding="utf-8", errors="replace")
-            f["diff"] = "\n".join(f"{i:4d}│{line}" for i, line in enumerate(text.splitlines(), 1))
+        path = cfg.root / f["path"]
+        if f["path"] in moved:
+            old, similarity = moved[f["path"]]
+            text = path.read_text(encoding="utf-8", errors="replace")
+            skeleton = outline(text)
+            f["moved_from"], f["similarity"] = old, similarity
+            f["diff"] = "" if similarity == 100 else (
+                verify.git(cfg.root, "diff", "--relative", "-C", sc["ref"], "--", old, f["path"]) or "")
+            if skeleton:
+                f["outline"] = skeleton
+            else:
+                f["diff"] = _numbered(text)  # 解析不了：附全文
+        elif f["status"] == "untracked" or sc["ref"] is None:
+            f["diff"] = _numbered(path.read_text(encoding="utf-8", errors="replace"))
         else:
             f["diff"] = verify.git(cfg.root, "diff", "--relative", "--no-renames", sc["ref"], "--", f["path"]) or ""
     return sc
@@ -204,10 +280,17 @@ def format_scope(sc: dict) -> str:
     fresh = [f["path"] for f in todo if f["status"] == "untracked"]
     bundled = [f for f in todo if "diff" in f]
     if bundled:
-        lines.append(f"── 差異（--bundle：底下 {len(bundled)} 個待審檔案的差異都在這裡，不用再跑 git diff 或讀檔；新檔案是整個內容加行號）")
+        lines.append(f"── 差異（--bundle：底下 {len(bundled)} 個待審檔案的差異都在這裡，不用再跑 git diff 或讀檔；新檔案是整個內容加行號，搬移過來的是差異加大綱）")
         for f in bundled:
-            lines.append(f"=== {f['path']}（{STATUS[f['status']]}）")
-            lines.append(f["diff"])
+            if "moved_from" in f:
+                lines.append(f"=== {f['path']}（{STATUS[f['status']]}；搬自 {f['moved_from']}，相似度 {f['similarity']}%）")
+                lines.append(f["diff"] or "（內容與搬移前相同）")
+                if "outline" in f:
+                    lines.append("── 大綱（整個檔案都在審查範圍：照大綱對照這一層的規則，要看哪一段就讀那幾行；要全文加 --full）")
+                    lines += f["outline"]
+            else:
+                lines.append(f"=== {f['path']}（{STATUS[f['status']]}）")
+                lines.append(f["diff"])
     else:
         if tracked and sc["ref"]:
             lines.append(f"看差異：git diff --no-renames {sc['ref'][:12]} -- " + " ".join(tracked))
@@ -324,6 +407,16 @@ def validate(sc: dict, data) -> tuple[list[str], list[dict]]:
             why = "有 priority 0 或 1 的發現" + ("（含沿用上次審查的檔案）" if kept_blocking else "") if blocking else "沒有 priority 0 或 1 的發現"
             errors.append(f"overall 應該是 {expected}：{why}")
     return errors, out
+
+
+def submit(cfg: Config, data, base: str | None = None) -> tuple[list[str], dict | None]:
+    """交回審查結果：驗證，通過才記錄。回傳 (錯誤, 紀錄)；有錯誤時紀錄是 None。review --result 與 batch finish 共用。"""
+    sc = scope(cfg, base)
+    errors, findings = validate(sc, data)
+    usage.record(cfg.root, "review-result", valid=not errors, findings=len(findings))
+    if errors:
+        return errors, None
+    return [], record(cfg, sc, data, findings)
 
 
 # ── 紀錄 ──

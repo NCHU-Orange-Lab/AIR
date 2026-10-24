@@ -12,7 +12,7 @@ description: 安裝 AIR、分析現有專案、規劃或執行分層遷移時使
 3. 做完該階段後**停下來**，向使用者報告，等使用者核准後才進入下一階段
 
 - 每一批遷移與收尾的驗證用 `python3 AIR/air.py verify`（收尾用 `--scope final`），只跑 `check` 不算。既有失敗以 `.air/test-baseline.json` 為準（分析階段 `verify --record-baseline` 記的）；黃金重播的輸出變了就是行為變了，重錄要使用者決定。
-- 每一批 commit 前照 skill `air-review` 做語意審查，補上程式檢查不到的規則；priority 0、1 的發現要處理或向使用者說明。
+- 每一批 commit 前照 skill `air-review` 做語意審查，補上程式檢查不到的規則；priority 0、1 的發現要處理或向使用者說明。審查結果與這一批的收尾用 `batch finish --review -` 一次交，再照它印的指令 commit。
 - `python3 AIR/air.py phase <階段>` 被拒絕時，照它列出的原因處理；不要用 `--force`，除非使用者明確要求。
 - 建立分層時專案已有同名模組（例如 `main.py`）：`layers` 會拒絕；是這一層就用 `layers --adopt-module <層>`，它列出的 allow-legacy 要經使用者同意才寫進 `.air/project.toml`。
 - `status` 顯示「遷移暫停中」就照一般開發，不要自己 `resume`；要擱置遷移也是由使用者執行 `pause --reason`。

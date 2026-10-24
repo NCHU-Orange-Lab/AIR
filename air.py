@@ -7,12 +7,14 @@
   python3 AIR/air.py verify --record-baseline [--scope batch|final]
                                              跑測試，把目前失敗的測試記成基準（.air/test-baseline.json，進版本控制；分析階段做一次）
   python3 AIR/air.py golden record [名稱 ...]  跑黃金重播的指令，把輸出檔的 sha256 記進 .air/golden.json（只由使用者決定何時重錄）
-  python3 AIR/air.py batch close [--note 說明] [--ack 理由]  結束這一批（commit 之後）：把這批的代理指標記進 .air/history.jsonl；審查還有沒處理的 P1 時要 --ack
-                                             （搬了幾檔幾行、審查字數、verify 次數與時間、擋下次數、剩餘舊模組）；要先通過驗收
+  python3 AIR/air.py batch finish [--note 說明] [--review 檔案|-] [--ack 理由]
+                                             結束這一批（commit 之前，一個指令做完）：驗收紀錄新鮮就沿用、否則重跑 verify；有給 --review 就驗證並記錄審查結果；
+                                             審查還有沒處理的 P1 時要 --ack；把這批的代理指標記進 .air/history.jsonl，印出 commit 指令（history.jsonl 一起 commit）
+  python3 AIR/air.py batch close [--note 說明] [--ack 理由]  舊的做法（commit 之後）：同上但不跑 verify、不收審查結果，要先通過驗收
   python3 AIR/air.py batch list              列出每一批的指標，改版前後可以比較
-  python3 AIR/air.py review [--base 分支] [--bundle] [--json]
+  python3 AIR/air.py review [--base 分支] [--bundle [--full]] [--json]
                                              語意審查的範圍：這次變更改到的層內檔案、各要對照哪些沒有程式檢查的規則（做法見 skill air-review）
-                                             --bundle 把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊
+                                             --bundle 把每個待審檔案的差異一起印出（新檔案整個列出；搬移過來的只附差異與大綱，--full 也整個列出），一次拿齊
   python3 AIR/air.py review --result <檔案|-> [--base 分支]
                                              交回審查結果（JSON）：驗證後寫進 .air/branches/<分支>/review.json；有 priority 0／1 的發現結束碼 1
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
@@ -32,6 +34,8 @@
   python3 AIR/air.py hook <session-start|pre-edit|pre-bash|post-edit|stop> [--host claude|codex]
                                              給 hook 使用（從 stdin 讀 JSON；宿主的差異見 lib/airkit/hosts.py）
   python3 AIR/air.py manifest                重新產生 AIR/MANIFEST.sha256（維護 AIR 時在開發 repo 用；裝好的專案裡不能用）
+
+輸出超過 .air/project.toml 的 [output] max-chars（預設 4,000 字）時，完整內容寫進 .air/out/<指令>.txt，畫面只印開頭（--json 不截）。
 
 結束碼：0 通過；1 沒通過（違規、驗收未通過、階段轉移被拒、doctor 有問題、審查有待處理的發現）；
         2 操作錯誤（找不到檔案、沒安裝、設定錯、測試指令跑不起來、審查結果無效）
@@ -55,7 +59,7 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import batch, budget, buildcheck, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, stages, usage, verify  # noqa: E402
+from airkit import batch, budget, buildcheck, context, doctor, golden, guard, hooklog, hosts, install, integrity, out, project, protect, review, stages, usage, verify  # noqa: E402
 from airkit.checks import EXIT, check, format_grouped, grouped, rel, structure_violations  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -63,13 +67,12 @@ FIX_HINT = "依訊息中的規則編號讀對應層的規則（AIR/rules/<層>.m
 STOP_GROUPS = 10  # 結束前的檢查最多印幾組違規（同一種違規算一組）；其餘寫進 .air/branches/<分支>/last-check.json
 
 
-def print_report(report, root: Path, show_soft: bool = True) -> None:
-    for line in format_grouped(report.hard, root):  # 同一種違規只印一次修法
-        print(line)
+def report_lines(report, root: Path, show_soft: bool = True) -> list[str]:
+    lines = list(format_grouped(report.hard, root))  # 同一種違規只印一次修法
     if show_soft and report.soft:
-        print("── 僅供參考（不影響結果）")
-        for v in report.soft:
-            print(v.format(root))
+        lines.append("── 僅供參考（不影響結果）")
+        lines += [v.format(root) for v in report.soft]
+    return lines
 
 
 def cmd_check(args) -> int:
@@ -79,8 +82,7 @@ def cmd_check(args) -> int:
     if args.json:
         print(json.dumps(report.to_dict(cfg.root), ensure_ascii=False, indent=2))
     else:
-        print_report(report, cfg.root)
-        print(report.summary(cfg.root))
+        print(out.emit(cfg, "check", "\n".join([*report_lines(report, cfg.root), report.summary(cfg.root)])))
     return EXIT[report.verdict]
 
 
@@ -99,15 +101,20 @@ def cmd_verify(args) -> int:
             print("之後 verify 只要失敗都在基準裡就算通過；基準裡的測試修好了會列出來，重跑這個指令可以縮小基準。")
         return 0
     receipt = verify.verify(cfg, args.scope)
-    print(json.dumps(receipt, ensure_ascii=False, indent=2) if args.json else verify.format_receipt(receipt))
+    print(json.dumps(receipt, ensure_ascii=False, indent=2) if args.json else out.emit(cfg, "verify", verify.format_receipt(receipt)))
     return verify.exit_code(receipt)
 
 
 def cmd_batch(args) -> int:
     cfg = load()
     if args.action == "list":
-        print(batch.format_list(batch.batches(cfg.root)))
+        print(out.emit(cfg, "batch-list", batch.format_list(batch.batches(cfg.root))))
         return 0
+    if args.action == "finish":
+        return _batch_finish(cfg, args)
+    if args.review:
+        print("錯誤：--review 只用在 batch finish（batch close 之前先用 review --result 交回）。", file=sys.stderr)
+        return 2
     try:
         entry, warnings = batch.close(cfg, args.note, args.ack)
     except batch.BatchError as e:
@@ -117,6 +124,28 @@ def cmd_batch(args) -> int:
     for w in warnings:
         print(f"  注意：{w}")
     print("停下來向使用者報告這批改了什麼、測試結果與上面的指標，等核准後才進行下一批。")
+    return 0
+
+
+def _batch_finish(cfg: Config, args) -> int:
+    data = read_json_arg(args.review) if args.review else None
+    try:
+        entry, warnings, receipt = batch.finish(cfg, args.note, args.ack, data)
+    except batch.ReviewInvalid as e:
+        print_invalid_review(e.errors)
+        print("這一批沒有結束（驗收紀錄已經寫好，修正審查結果後重跑 batch finish 會沿用）。", file=sys.stderr)
+        return 2
+    except batch.BatchError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
+    print(f"驗收：沿用 {verify.describe(cfg, receipt)}" if receipt["reused"] else out.emit(cfg, "verify", verify.format_receipt(receipt)))
+    if data is not None:
+        print(f"語意審查：{review.describe(cfg, review.load_record(cfg.root))}")
+    print(f"這一批已記進 .air/history.jsonl：{batch.describe(entry)}")
+    for w in warnings:
+        print(f"  注意：{w}")
+    print(f"下一步：commit，把 .air/history.jsonl 一起加進去：{batch.commit_hint(cfg, entry)}")
+    print("commit 之後停下來向使用者報告這批改了什麼、測試結果與上面的指標，等核准後才進行下一批。")
     return 0
 
 
@@ -130,36 +159,45 @@ def cmd_golden(args) -> int:
     return 0
 
 
+def print_invalid_review(errors: list[str]) -> None:
+    print("審查結果無效，沒有記錄：", file=sys.stderr)
+    for err in errors:
+        print(f"  - {err}", file=sys.stderr)
+    print("修正後重新交回（格式見 skill air-review；範圍與規則編號用 python3 AIR/air.py review 查）。", file=sys.stderr)
+
+
+def read_json_arg(value: str):
+    """--result／--review 的內容：- 是 stdin，否則是檔案。不是 JSON 時 raise ValueError（訊息給使用者看）。"""
+    text = sys.stdin.read() if value == "-" else Path(value).read_text(encoding="utf-8")
+    try:
+        return json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"審查結果不是 JSON（{e}）。格式見 skill air-review。") from None
+
+
 def cmd_review(args) -> int:
     """沒有 --result：印出審查範圍（--bundle 連差異一起）。有 --result：驗證交回的結果，通過才記錄（無效＝2，有待處理的發現＝1）。"""
     cfg = load()
+    if args.result is not None:
+        return _review_result(cfg, args)
     sc = review.scope(cfg, args.base)
-    if args.result is None:
-        if args.bundle:
-            review.bundle(cfg, sc)
-        text = json.dumps(sc, ensure_ascii=False, indent=2) if args.json else review.format_scope(sc)
-        print(text)
-        usage.record(cfg.root, "review-scope", chars=len(text), files=sum(1 for f in sc["files"] if not f["reused"]),
-                     reused=sum(1 for f in sc["files"] if f["reused"]), bundle=args.bundle)
-        return 0
     if args.bundle:
-        print("錯誤：--bundle 只用在印範圍，不能跟 --result 一起用。", file=sys.stderr)
+        review.bundle(cfg, sc, full=args.full)
+    text = json.dumps(sc, ensure_ascii=False, indent=2) if args.json else out.emit(cfg, "review", review.format_scope(sc))
+    print(text)
+    usage.record(cfg.root, "review-scope", chars=len(text), files=sum(1 for f in sc["files"] if not f["reused"]),
+                 reused=sum(1 for f in sc["files"] if f["reused"]), bundle=args.bundle)
+    return 0
+
+
+def _review_result(cfg: Config, args) -> int:
+    if args.bundle or args.full:
+        print("錯誤：--bundle、--full 只用在印範圍，不能跟 --result 一起用。", file=sys.stderr)
         return 2
-    text = sys.stdin.read() if args.result == "-" else Path(args.result).read_text(encoding="utf-8")
-    try:
-        data = json.loads(text)
-    except ValueError as e:
-        print(f"錯誤：審查結果不是 JSON（{e}）。格式見 skill air-review。", file=sys.stderr)
-        return 2
-    errors, findings = review.validate(sc, data)
-    usage.record(cfg.root, "review-result", valid=not errors, findings=len(findings))
+    errors, rec = review.submit(cfg, read_json_arg(args.result), args.base)
     if errors:
-        print("審查結果無效，沒有記錄：", file=sys.stderr)
-        for err in errors:
-            print(f"  - {err}", file=sys.stderr)
-        print("修正後重新交回（格式見 skill air-review；範圍與規則編號用 python3 AIR/air.py review 查）。", file=sys.stderr)
+        print_invalid_review(errors)
         return 2
-    rec = review.record(cfg, sc, data, findings)
     print(json.dumps(rec, ensure_ascii=False, indent=2) if args.json else review.format_result(rec))
     return review.exit_code(rec)
 
@@ -225,13 +263,13 @@ def cmd_survey(args) -> int:
     rows = project.survey_rows(cfg)
     table = project.survey(cfg, rows)
     if args.out:
-        out = (cfg.root / args.out).resolve()
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(table, encoding="utf-8")
-        text = project.survey_summary(cfg, rows, out)
+        dest = (cfg.root / args.out).resolve()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(table, encoding="utf-8")
+        text = project.survey_summary(cfg, rows, dest)
     else:
-        text = table
-    print(text, end="")
+        text = out.emit(cfg, "survey", table)
+    print(text if text.endswith("\n") else text + "\n", end="")
     usage.record(cfg.root, "survey", modules=len(rows), chars=len(text), out=args.out)
     return 0
 
@@ -420,13 +458,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["record"])
     p.add_argument("names", nargs="*", help="只記這些（預設全部）")
     p = sub.add_parser("batch")
-    p.add_argument("action", choices=["close", "list"])
+    p.add_argument("action", choices=["finish", "close", "list"])
     p.add_argument("--note", default="", help="這一批做了什麼（例如「第 3 批：搬 storage」）")
     p.add_argument("--ack", default="", help="審查紀錄裡還有 priority 0／1 的發現卻要結束這一批時，寫明不處理的理由（要先經使用者同意）")
+    p.add_argument("--review", help="batch finish：同時交回審查結果的 JSON 檔案；- 表示從 stdin 讀（跟 review --result 一樣驗證）")
     p = sub.add_parser("review")
     p.add_argument("--base", help="審整個分支：相對這個分支（或 commit）的 merge-base；預設相對 HEAD")
     p.add_argument("--result", help="交回審查結果的 JSON 檔案；- 表示從 stdin 讀")
-    p.add_argument("--bundle", action="store_true", help="把每個待審檔案的差異一起印出（新檔案整個列出），一次拿齊，不用再逐檔 git diff")
+    p.add_argument("--bundle", action="store_true", help="把每個待審檔案的差異一起印出（新檔案整個列出；搬移過來的檔案只附差異與大綱），一次拿齊，不用再逐檔 git diff")
+    p.add_argument("--full", action="store_true", help="跟 --bundle 一起用：搬移過來的檔案也整個列出")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("install")
     p.add_argument("--package")
