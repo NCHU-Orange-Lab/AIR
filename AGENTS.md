@@ -19,7 +19,7 @@
 
 ## 依位置讀規則
 
-改到哪一層就照 `AIR/rules/<層>.md`（測試是 `tests.md`），沒改到的層不用讀。Claude Code 讀寫該層時會自動載入（`.claude/rules`），Codex 第一次修改時由 hook 附上；其他工具請自行讀取。
+改到哪一層就照 `AIR/rules/<層>.md`（測試是 `tests.md`），沒改到的層不用讀。Claude Code 讀寫該層時會自動載入（`.claude/rules`），Codex 第一次修改（含用 Bash）時由 hook 附上；其他工具請自行讀取。
 
 ## 永遠適用（只有這三條）
 

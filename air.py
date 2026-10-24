@@ -338,6 +338,7 @@ def hook_session_start(event: hosts.Event, cfg: Config) -> int:
     （結束前的檢查用），附上目前狀態。"""
     context.reset(cfg.root, event.session_id)
     context.take_snapshot(cfg, event.session_id)
+    context.mark_seen(cfg, event.session_id)  # Bash 前的比對從這裡開始算；之前就有的半成品不算這個 session 的
     hook_output("SessionStart", additionalContext=context.session_context(cfg, event.host))
     return 0
 
@@ -373,6 +374,7 @@ def hook_pre_edit(event: hosts.Event, cfg: Config) -> int:
 
 def hook_post_edit(event: hosts.Event, cfg: Config) -> int:
     context.remember_touched(cfg.root, event.session_id, event.files)  # 結束前的檢查用：這個 session 動過哪些檔案
+    context.mark_seen(cfg, event.session_id, event.files)              # 這裡查過了，下一次 Bash 前不再當成 Bash 改的
     paths = [p for p in event.files if p.suffix == ".py"]
     if not paths:
         return 0
@@ -391,10 +393,25 @@ def hook_post_edit(event: hosts.Event, cfg: Config) -> int:
 
 
 def hook_pre_bash(event: hosts.Event, cfg: Config) -> int:
+    """執行 Bash 前：擋下略過 commit 前檢查的指令；再看上一個 Bash 改了哪些層內的檔案（AI 常用 Bash 改檔，編輯工具的 hook 不會觸發）：
+    有違規就附上（修改已經寫入，不能擋，只能要求修正），第一次碰到的層附上規則。Codex 沒有路徑規則，指令裡提到的層也先附規則；
+    Claude Code 讀檔（含 Bash 的 cat）時由 .claude/rules 自己載入，只補「用 Bash 改了」的那一層。不多開程序：沿用這個 hook 本來的那一個。"""
     reason = guard.check(event.command)
     if reason:
         print(f"{reason}請修正 `python3 AIR/air.py check` 回報的問題後再 commit。", file=sys.stderr)
         return 2
+    changed = context.bash_changes(cfg, event.session_id)
+    texts = []
+    report = check(cfg, [p for p in changed if p.suffix == ".py"])
+    if report.hard:
+        texts.append(f"【AIR：上一個指令改的檔案違反規則（修改已經寫入，必須修正）】\n"
+                     + "\n".join(format_grouped(report.hard, cfg.root, limit=STOP_GROUPS)) + f"\n{FIX_HINT}")
+    texts.append(context.rules_to_inject(cfg, event.session_id, changed, lead="你剛用指令改了"))
+    if not event.host.rules_dir:
+        texts.append(context.rules_to_inject(cfg, event.session_id, context.paths_in_command(cfg, event.command), lead="這個指令會動到"))
+    texts = [t for t in texts if t]
+    if texts:
+        hook_output("PreToolUse", additionalContext="\n\n".join(texts))
     return 0
 
 
@@ -435,7 +452,9 @@ HOOK_HANDLERS = {
 def cmd_hook(args) -> int:
     try:
         event = hosts.parse(json.loads(sys.stdin.read() or "{}"), args.host)
-        return HOOK_HANDLERS[args.event](event, load())
+        cfg = load()
+        context.count_fired(cfg.root, event.session_id, args.event)  # status、doctor 看得到 hook 有沒有真的在跑
+        return HOOK_HANDLERS[args.event](event, cfg)
     except ConfigError:
         return 0  # 還沒安裝完成（沒有 .air/project.toml）時，hook 不做任何事
     except Exception as e:  # noqa: BLE001 — hook 自己的錯誤不能變成 AI 的程式違規，也不擋住工作；commit 前檢查仍會把關

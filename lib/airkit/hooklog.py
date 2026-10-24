@@ -8,10 +8,13 @@ status 與 doctor 顯示最近 24 小時的次數。檔案不進版本控制，�
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 LOG_FILE = Path(".air") / "hook-errors.log"
+SESSIONS_DIR = Path(".air") / "sessions"  # 每個 session 的紀錄（寫入在 context.py）；這裡只讀 hook 觸發的次數
+EVENTS = ("session-start", "pre-edit", "pre-bash", "post-edit", "stop")
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -44,6 +47,33 @@ def recent(root: Path, hours: int = 24) -> list[tuple[str, str, str]]:
         if when >= cutoff:
             out.append((stamp, where, reason))
     return out
+
+
+def fired(root: Path) -> tuple[str, dict[str, int]] | None:
+    """最近一個有紀錄的 session：(最後一次觸發的本機時間, 各 hook 的次數)。沒有任何紀錄是 None。
+
+    試跑（2026-10-24）：16 次 AIR 試跑裡 post-edit 擋下 0 次、Stop 擋下 0 次，分不出是「沒有違規」還是「hook 根本沒跑」
+    （AI 都用 Bash 改檔，編輯工具的 hook 不會觸發；session 開始時還沒安裝，SessionStart 也不會附）。"""
+    directory = root / SESSIONS_DIR
+    best = None
+    for path in directory.glob("*.json") if directory.is_dir() else []:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        counts = data.get("fired") if isinstance(data, dict) else None
+        if isinstance(counts, dict) and isinstance(data.get("last"), str) and (best is None or data["last"] > best[0]):
+            best = (data["last"], {e: int(counts.get(e, 0)) for e in EVENTS})
+    return best
+
+
+def describe_fired(root: Path) -> str:
+    """給 status、doctor 用的一行。"""
+    got = fired(root)
+    if got is None:
+        return "還沒有紀錄（還沒開始過有 hook 的 session，或 hook 沒有執行：Codex 要先信任 AIR 的 hook）"
+    when, counts = got
+    return f"最近一個 session（{when[5:16].replace('T', ' ')}）：" + "、".join(f"{e} {n}" for e, n in counts.items())
 
 
 def describe(root: Path) -> str:

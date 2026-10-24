@@ -18,7 +18,7 @@ steps/                         純邏輯（不碰 I/O、時間、亂數）
 contracts/                     跨層的型別與介面
 ```
 
-並且用程式強制執行：AI 每次編輯檔案、每次要結束工作（只看這個 session 動過的檔案）、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 複製的 skill；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。程式檢查不到的規則（例如 flow 不寫計算、adapter 關閉副作用），每批 commit 前由 AI 照 skill `air-review` 審查：`review` 指令用 git 界定這次的變更、列出要對照的規則，審查結果要通過格式與範圍的驗證才會被記錄。
+並且用程式強制執行：AI 每次編輯檔案（用 Bash 改的在下一次執行 Bash 前）、每次要結束工作（只看這個 session 動過的檔案）、每次 commit 時都會被檢查，違規時會收到規則編號和修法。AI 也不能用編輯工具修改 `AIR/`、hook 設定或 AIR 複製的 skill；`AIR/` 的每個檔案都列在 `MANIFEST.sha256`，用其他方式改了，結束前與 commit 前也會被抓到（AIR009）。程式檢查不到的規則（例如 flow 不寫計算、adapter 關閉副作用），每批 commit 前由 AI 照 skill `air-review` 審查：`review` 指令用 git 界定這次的變更、列出要對照的規則，審查結果要通過格式與範圍的驗證才會被記錄。
 
 ## 怎麼開始
 
@@ -49,8 +49,8 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 工具 | hook 設定 | skills | 差異 |
 |---|---|---|---|
-| Claude Code（Grok Build 讀同一份設定） | `.claude/settings.json` | `.claude/skills/` | 五個 hook；各層規則放在 `.claude/rules/air-<層>.md`，讀寫該層時由 Claude Code 自己載入（不啟動 Python）；修改 `.air/project.toml` 會跳出確認 |
-| Codex | `.codex/hooks.json` | `.agents/skills/` | 五個 hook；各層規則在第一次修改該層時由 hook 附上；不支援確認，改成提醒；**hook 要在 Codex 裡信任過才會執行** |
+| Claude Code（Grok Build 讀同一份設定） | `.claude/settings.json` | `.claude/skills/` | 五個 hook；各層規則放在 `.claude/rules/air-<層>.md`，讀寫該層時由 Claude Code 自己載入（不啟動 Python），用 Bash 改了某一層時由 hook 補附；修改 `.air/project.toml` 會跳出確認 |
+| Codex | `.codex/hooks.json` | `.agents/skills/` | 五個 hook；各層規則在第一次修改該層時由 hook 附上（編輯工具，或指令裡提到該層、上一個指令改了該層）；不支援確認，改成提醒；**hook 要在 Codex 裡信任過才會執行** |
 
 只用其中一種：`sh AIR/install.sh --host claude`（或 `--host codex`）。`python3 AIR/air.py doctor` 列出每個工具的接線狀態。
 
@@ -94,7 +94,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 | 指令 | 做什麼 |
 |---|---|
-| `python3 AIR/air.py status` | 本機時間、套件、遷移階段與現在該讀的階段檔、分支、檢查範圍、違規數、hook 錯誤、成本指標、最近驗收與審查；常駐內容到 80% 以上時多一行 |
+| `python3 AIR/air.py status` | 本機時間、套件、遷移階段與現在該讀的階段檔、分支、檢查範圍、違規數、hook 錯誤與最近一個 session 每個 hook 觸發幾次、成本指標、最近驗收與審查；常駐內容到 80% 以上時多一行 |
 | `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查；常駐內容到 80% 以上也會列出 |
 | `python3 AIR/air.py doctor --context` | 常駐內容的完整盤點：各工具一開場載入的檔案（CLAUDE.md 鏈、沒有 `paths` 的規則、自動記憶索引、Codex 的 AGENTS.md 鏈）、大小、上限與佔比、AIR 區塊的位置 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |

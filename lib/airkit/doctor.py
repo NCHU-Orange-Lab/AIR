@@ -232,6 +232,11 @@ def _hook_errors(root: Path) -> list[Item]:
     return [Item(WARN, "hook", f"最近 24 小時 hook 失敗 {len(items)} 次（{hooklog.LOG_FILE.as_posix()}）；最近一次 {where}：{reason}")]
 
 
+def _hooks_fired(root: Path) -> Item:
+    """最近一個 session 每個 hook 觸發幾次：hook 沒在跑（Codex 沒信任、session 開始時還沒裝好）時，擋下 0 次不代表沒有違規。"""
+    return Item(OK, "hook 觸發", hooklog.describe_fired(root))
+
+
 def _commit_check(root: Path) -> Item:
     status = install.commit_check_status(root)
     if status == "不是 git repo":
@@ -302,6 +307,7 @@ def diagnose(root: Path) -> list[Item]:
     items += _stale_rules(root, cfg)
     items.append(_commit_check(root))
     items += _hook_errors(root)
+    items.append(_hooks_fired(root))
     items += _packaging(cfg)
     items += _tests_dir(root, cfg)
     items += _allow_stale(cfg)

@@ -358,6 +358,11 @@ def survey(cfg: Config, rows: list[dict] | None = None) -> str:
     return "\n".join(out) + "\n"
 
 
+def local_iso() -> str:
+    """本機時間（ISO，到秒）：hook 觸發紀錄用，字串可以直接比大小。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
 def local_time() -> str:
     """本機時間，給 status 與 session 開始時的狀態用：AI 寫日期的依據（實戰中 AI 手寫的日期曾比時鐘超前 1–2 天）。"""
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %z")
@@ -397,6 +402,8 @@ def status_data(cfg: Config) -> dict:
         "commit_check": install.commit_check_status(cfg.root),
         "hook_errors": len(hooklog.recent(cfg.root)),
         "hook_errors_text": hooklog.describe(cfg.root),
+        "hooks_fired": hooklog.fired(cfg.root),
+        "hooks_fired_text": hooklog.describe_fired(cfg.root),
         "usage": usage.summary(cfg.root),
         "usage_text": usage.describe(cfg.root),
         "context_budget": budget.status_line(cfg.root),  # 只有到 80% 以上才有值
@@ -439,6 +446,7 @@ def status(cfg: Config) -> str:
         f"套件完整性：{integrity_line}",
         f"commit 前檢查：{d['commit_check']}",
         f"hook 錯誤（24 小時內）：{d['hook_errors_text']}",
+        f"hook 觸發：{d['hooks_fired_text']}",
         f"成本指標（本機累計）：{d['usage_text']}",
         *([f"常駐內容：{d['context_budget']}"] if d["context_budget"] else []),
         f"測試指令：{d['test_command'] or '（尚未設定）'}" + (f"；收尾：{d['final_command']}" if d["final_command"] else ""),

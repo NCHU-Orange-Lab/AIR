@@ -10,6 +10,9 @@ Claude Code 不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rul
   touched   編輯工具動過的檔案（post-edit 記下）
   snapshot  session 第一次開始時各層 .py 的內容雜湊：結束前用它找出「這個 session 開始後才變的檔案」，
             不管是誰用什麼方式改的；別的 session 在這之前留下的半成品不算（實戰中 session B 什麼都沒改卻被擋下）
+  seen      套件與測試目錄裡 git 看得到變更的檔案與它們的 (mtime, 大小)：每次 Bash 前比對，找出上一個 Bash 改了哪些檔案
+            （試跑中 AI 幾乎都用 Bash 改檔，編輯工具的 hook 不會觸發：規則送不到、改完也沒有檢查）
+  fired     每個 hook 觸發的次數與最後一次的時間（status、doctor 顯示），分得出「沒有違規」與「hook 沒跑」
 """
 
 from __future__ import annotations
@@ -20,13 +23,13 @@ import re
 import time
 from pathlib import Path
 
-from . import project, stages
-from .checks import layer_files
+from . import hooklog, project, stages, verify
+from .checks import layer_files, rel
 from .config import KIT_DIR, Config
 from .hosts import Host
 from .rules import name_for as rule_name  # noqa: F401 — 哪個檔案適用哪份規則，跟語意審查共用同一個判斷
 
-SESSIONS_DIR = Path(".air") / "sessions"
+SESSIONS_DIR = hooklog.SESSIONS_DIR
 STAGE_OF_PHASE = stages.STAGE_OF_PHASE  # 這個階段該讀 AIR/start/ 的哪一份
 KEEP_DAYS = 7  # 超過這麼久沒動的注入紀錄，session 開始時順便清掉
 PHASE_GUIDE = {
@@ -122,6 +125,81 @@ def stop_targets(cfg: Config, session_id: str) -> tuple[list[Path], list[Path], 
     return edited, changed, isinstance(snapshot, dict)
 
 
+def count_fired(root: Path, session_id: str, event: str) -> None:
+    """這個 hook 又觸發了一次（cmd_hook 在處理之前呼叫）。"""
+    state = _load(root, session_id)
+    counts = state.get("fired") if isinstance(state.get("fired"), dict) else {}
+    counts[event] = int(counts.get(event, 0)) + 1
+    state["fired"], state["last"] = counts, project.local_iso()
+    _save(root, session_id, state)
+
+
+def _dirty(cfg: Config) -> dict[str, list[int]] | None:
+    """套件與測試目錄裡 git 看得到變更的檔案（含未追蹤的）→ [mtime_ns, 大小]。不是 git repo 是 None。"""
+    paths = [rel(p, cfg.root) for p in (cfg.package_dir, cfg.tests_dir) if p.exists()]
+    if not paths:
+        return {}
+    listed = verify.git(cfg.root, "-c", "core.quotepath=off", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", *paths)
+    if listed is None:
+        return None
+    out, items, i = {}, listed.split("\0"), 0
+    while i < len(items):
+        entry = items[i]
+        i += 2 if entry[:1] in ("R", "C") else 1  # 改名與複製的下一個欄位是原本的路徑
+        name = entry[3:]
+        path = cfg.root / name
+        if name and path.is_file():
+            st = path.stat()
+            out[name] = [st.st_mtime_ns, st.st_size]
+    return out
+
+
+def mark_seen(cfg: Config, session_id: str, paths=None) -> None:
+    """session 開始：記下目前的變更當基準（之前就有的半成品不算這個 session 的）。post-edit：只更新編輯工具剛改的檔案，
+    下一次 Bash 前就不會把它們當成 Bash 改的再查一次。"""
+    state = _load(cfg.root, session_id)
+    if paths is None:
+        now = _dirty(cfg)
+        if now is None:
+            return
+        state["seen"] = now
+    else:
+        seen = state.get("seen")
+        if not isinstance(seen, dict):
+            return
+        for p in paths:
+            r = _rel(cfg.root, Path(p))
+            if r and Path(p).is_file():
+                st = Path(p).stat()
+                seen[r] = [st.st_mtime_ns, st.st_size]
+    _save(cfg.root, session_id, state)
+
+
+def bash_changes(cfg: Config, session_id: str) -> list[Path]:
+    """上一次 Bash（或 session 開始）之後，套件與測試目錄裡內容變了的檔案；更新基準。沒有基準（session 開始時還沒裝好）時只記基準。"""
+    now = _dirty(cfg)
+    if now is None:
+        return []
+    state = _load(cfg.root, session_id)
+    before = state.get("seen")
+    state["seen"] = now
+    _save(cfg.root, session_id, state)
+    if not isinstance(before, dict):
+        return []
+    return [cfg.root / name for name, st in sorted(now.items()) if before.get(name) != st]
+
+
+def paths_in_command(cfg: Config, command: str) -> list[Path]:
+    """指令裡提到的層目錄與測試目錄（相對根目錄的寫法，例如 demo/steps/x.py）：Codex 沒有路徑規則，碰到之前先附那一層的規則。
+    每個提到的目錄給一個代表路徑，交給 rules_to_inject 判斷是哪一份規則。"""
+    out = []
+    for base in [*(la.path for la in cfg.layers.values()), cfg.tests_dir]:
+        r = rel(base, cfg.root)
+        if re.search(rf"(?<![\w.-]){re.escape(r)}(?![\w-])", command):
+            out.append(base / "__init__.py")
+    return out
+
+
 def reset(root: Path, session_id: str) -> None:
     """session 開始（含壓縮、恢復）：清掉規則注入的紀錄（下次碰到某層會重新附），保留動過的檔案與快照；順便清掉太久沒動的。"""
     state = _load(root, session_id)
@@ -139,14 +217,14 @@ def reset(root: Path, session_id: str) -> None:
             pass
 
 
-def rules_to_inject(cfg: Config, session_id: str, paths) -> str:
-    """這些檔案所屬的層，這個 session 還沒附過規則的，附上並記住。回傳要給 AI 的文字（空＝不用附）。"""
+def rules_to_inject(cfg: Config, session_id: str, paths, lead: str = "你正要修改") -> str:
+    """這些檔案所屬的層，這個 session 還沒附過規則的，附上並記住。回傳要給 AI 的文字（空＝不用附）。lead 是開頭的動詞。"""
     names = {n for n in (rule_name(p, cfg) for p in paths) if n} - injected(cfg.root, session_id)
     if not names:
         return ""
     remember(cfg.root, session_id, names)
     return "\n\n".join(
-        f"【AIR：你正要修改 {name} 的檔案，這是它的規則（AIR/rules/{name}.md；這個 session 只附一次）】\n{rule_text(name)}"
+        f"【AIR：{lead} {name} 的檔案，這是它的規則（AIR/rules/{name}.md；這個 session 只附一次）】\n{rule_text(name)}"
         for name in sorted(names)
     )
 

@@ -43,7 +43,9 @@ class TestInjection(ProjectTestCase):
         # Claude Code 由宿主自己載入 .claude/rules/air-<層>.md：hook 再附一次就是重複，而且原本每次 Read 都多啟動一個 Python
         r = self.p.hook("pre-edit", {"session_id": "s1", "tool_name": "Edit", "tool_input": {"file_path": str(self.steps)}})
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
-        self.assertFalse((self.p.root / ".air" / "sessions").exists())  # 連注入紀錄都不用寫
+        state = json.loads((self.p.root / ".air" / "sessions" / "s1.json").read_text(encoding="utf-8"))
+        self.assertNotIn("rules", state)                                 # 沒有注入紀錄，只有觸發次數
+        self.assertEqual(state["fired"], {"pre-edit": 1})
         self.assertEqual(self.p.air("hook", "pre-read").returncode, 2)  # 讀檔前的 hook 已經退休
 
     def test_other_layer_and_other_session_get_their_own(self):
