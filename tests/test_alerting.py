@@ -52,6 +52,11 @@ class TestStaleAllowances(ProjectTestCase):
         self.p.layer("storage", uses="from demo.old import x\n")                   # 允許的是 steps，不是 storage
         self.assertIn(("demo.old", legacy.NO_IMPORT), self.stale())
 
+    def test_a_package_directory_counts_as_an_existing_module(self):
+        self.p.write("demo/old/__init__.py", "x = 1\n")                           # demo.old 是套件（目錄），不是 old.py
+        self.p.layer("steps", ok="y = 2\n")
+        self.assertIn(("demo.old", legacy.NO_IMPORT), self.stale())                # 還在，只是沒人用：不是「已不存在」
+
     def test_module_outside_the_package_is_never_called_missing(self):
         cfg = self.p.cfg()
         self.assertTrue(legacy._module_exists("other.pkg.mod", cfg))               # 判斷不了就不當成過期的理由
@@ -152,7 +157,8 @@ class TestGrowth(GrowthCase):
         self.assertEqual(self.growth()["items"], ["demo/newmod.py"])             # demo/old.py 是起點就有的
 
     def test_rename_shim_marker_and_layer_files_are_not_growth(self):
-        subprocess.run(["git", "mv", "demo/old.py", "demo/renamed.py"], cwd=self.p.root, check=True)                        # 改名不算新增
+        subprocess.run(["git", "config", "diff.renames", "false"], cwd=self.p.root, check=True)  # 使用者的設定可以關掉改名偵測：-M 要自己帶
+        subprocess.run(["git", "mv", "demo/old.py", "demo/renamed.py"], cwd=self.p.root, check=True)  # 改名不算新增
         self.p.write("demo/shim.py", "from demo.steps.ok import x  # noqa\n")
         self.p.write("demo/sub/__init__.py", "")
         self.p.write("demo/steps/more.py", "y = 2\n")                              # 在層內
@@ -163,6 +169,9 @@ class TestGrowth(GrowthCase):
         (self.p.root / ".air" / "history.jsonl").write_text("", encoding="utf-8")  # 沒有批次、沒有轉移：起點不明
         c = self.growth()
         self.assertEqual((c["status"], c["detail"]), ("pass", "無法比對（沒有起點 commit）"))
+
+    def test_a_batch_closed_without_a_baseline_records_none_not_zero(self):
+        self.assertIsNone(self.p.history()[0]["legacy_new"])                       # setUp 的第 1 批：沒有轉移紀錄，起點不明
 
     def test_only_while_migrating(self):
         self.p.write("demo/newmod.py", "def g():\n    return 2\n")
