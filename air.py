@@ -24,7 +24,7 @@
   python3 AIR/air.py layers [層 ...] [--adopt-module 層]
                                              建立分層目錄（預設全部）；專案已有同名的 <層>.py 會拒絕，--adopt-module 把它搬成 <層>/__init__.py
   python3 AIR/air.py survey [--out 檔案]     盤點現有程式碼（Markdown；--out 寫進檔案，畫面只印摘要）
-  python3 AIR/air.py status [--json]         套件、遷移階段、檢查範圍、違規數、最近驗收
+  python3 AIR/air.py status [--json]         套件、遷移階段與現在該讀的階段檔、檢查範圍、違規數、最近驗收
   python3 AIR/air.py phase <階段> [--rollback|--force] [--reason 原因]
                                              推進遷移階段（一次一格，會檢查前置條件；退回或強制要寫原因）
   python3 AIR/air.py pause --reason 原因      暫停遷移（只由使用者要求時執行）：階段保留，分析／計畫階段的 .py 凍結解除，
@@ -55,7 +55,7 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
-from airkit import batch, budget, buildcheck, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, usage, verify  # noqa: E402
+from airkit import batch, budget, buildcheck, context, doctor, golden, guard, hooklog, hosts, install, integrity, project, protect, review, stages, usage, verify  # noqa: E402
 from airkit.checks import EXIT, check, format_grouped, grouped, rel, structure_violations  # noqa: E402
 from airkit.config import PROJECT_FILE, Config, ConfigError, load, project_root  # noqa: E402
 
@@ -172,7 +172,7 @@ def cmd_install(args) -> int:
     if failed:
         print(f"AIR 安裝未完成：{len(failed)} 個接點失敗（見上面「失敗」的項目）。處理後再執行一次 sh AIR/install.sh，已完成的部分不會重做。", file=sys.stderr)
         return 1
-    print("AIR 安裝完成。下一步：照 AIR/START.md 進入分析階段（python3 AIR/air.py doctor 可以隨時檢查接線）。")
+    print(f"AIR 安裝完成。下一步：使用者核准後進入分析階段，讀 {stages.shown(2)}（只讀這一份；python3 AIR/air.py doctor 可以隨時檢查接線）。")
     return 0
 
 
@@ -259,7 +259,8 @@ def cmd_phase(args) -> int:
         return 1
     for line in lines:
         print(f"  {line}")
-    print(f"遷移階段：{args.phase}")
+    stage = stages.for_phase(args.phase)
+    print(f"遷移階段：{args.phase}" + (f"。這個階段的做法：{stages.shown(stage)}（只讀這一份）" if stage else ""))
     return 0
 
 

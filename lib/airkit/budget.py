@@ -246,7 +246,7 @@ def air_items(cfg: Config) -> list[Item]:
     for host in HOSTS.values():
         text = context.session_context(cfg, host)
         items.append(Item("AIR", f"SessionStart 注入（{host.label}）", "hook", len(text.encode("utf-8")), text.count("\n") + 1,
-                          sum(len(line) > LONG_LINE for line in text.splitlines()), note="每次開始、恢復、壓縮後；內容由 status 與 START.md 當下階段組成"))
+                          sum(len(line) > LONG_LINE for line in text.splitlines()), note="每次開始、恢復、壓縮後；內容由 status 與當下階段的 AIR/start/ 檔組成"))
     return items
 
 

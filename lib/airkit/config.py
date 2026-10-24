@@ -263,5 +263,5 @@ def load(root: Path | None = None) -> Config:
     root = root or project_root()
     path = root / PROJECT_FILE
     if not path.exists():
-        raise ConfigError("找不到 .air/project.toml：AIR 還沒安裝。請執行 AIR/install.sh。")
+        raise ConfigError("找不到 .air/project.toml：AIR 還沒安裝：照 AIR/start/1-install.md 安裝（sh AIR/install.sh）。")
     return build(read_kit(), tomllib.loads(path.read_text(encoding="utf-8")), root)
