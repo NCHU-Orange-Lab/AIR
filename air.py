@@ -123,8 +123,15 @@ def cmd_batch(args) -> int:
     print(f"這一批已記進 .air/history.jsonl：{batch.describe(entry)}")
     for w in warnings:
         print(f"  注意：{w}")
+    print(FINISH_HINT)
     print("停下來向使用者報告這批改了什麼、測試結果與上面的指標，等核准後才進行下一批。")
     return 0
+
+
+# 舊的兩步（review --result、commit、batch close）仍然可用；第二輪試跑 Codex 8 次裡只有 1 次用 batch finish，
+# 其餘去讀 batch.py 的原始碼找 close 怎麼用。走舊路時提示一次新的一步
+FINISH_HINT = ("下一批改用 batch finish：在 commit 之前一個指令做完驗收、交回審查與紀錄"
+               """（python3 AIR/air.py batch finish --note "第 N 批：…" --review - <<'EOF' … EOF），不用再分開跑 review --result 與 batch close。""")
 
 
 def _batch_finish(cfg: Config, args) -> int:
@@ -183,7 +190,7 @@ def cmd_review(args) -> int:
     sc = review.scope(cfg, args.base)
     if args.bundle:
         review.bundle(cfg, sc, full=args.full)
-    text = json.dumps(sc, ensure_ascii=False, indent=2) if args.json else out.emit(cfg, "review", review.format_scope(sc))
+    text = json.dumps(sc, ensure_ascii=False, indent=2) if args.json else out.emit(cfg, "review", review.format_scope(sc, migrating=cfg.phase == "migrating"))
     print(text)
     usage.record(cfg.root, "review-scope", chars=len(text), files=sum(1 for f in sc["files"] if not f["reused"]),
                  reused=sum(1 for f in sc["files"] if f["reused"]), bundle=args.bundle)
@@ -199,6 +206,8 @@ def _review_result(cfg: Config, args) -> int:
         print_invalid_review(errors)
         return 2
     print(json.dumps(rec, ensure_ascii=False, indent=2) if args.json else review.format_result(rec))
+    if cfg.phase == "migrating" and not args.json:
+        print(FINISH_HINT)
     return review.exit_code(rec)
 
 
@@ -290,15 +299,23 @@ def cmd_manifest(args) -> int:
 
 
 def cmd_phase(args) -> int:
+    """轉移成功後直接印出新階段的做法全文：session 中途換階段時 SessionStart 不會再附，只給檔名的話
+    Codex 常常不讀（第二輪試跑 16 次裡 4-layers.md、5-migrate.md 幾乎沒讀），改去讀 AIR 的原始碼找做法，反而更貴。"""
+    cfg = load()
     try:
-        lines = project.transition(load(), args.phase, rollback=args.rollback, force=args.force, reason=args.reason)
+        lines = project.transition(cfg, args.phase, rollback=args.rollback, force=args.force, reason=args.reason)
     except project.TransitionError as e:
         print(f"錯誤：{e}", file=sys.stderr)
         return 1
     for line in lines:
         print(f"  {line}")
     stage = stages.for_phase(args.phase)
-    print(f"遷移階段：{args.phase}" + (f"。這個階段的做法：{stages.shown(stage)}（只讀這一份）" if stage else ""))
+    if not stage:
+        print(f"遷移階段：{args.phase}")
+    elif stage == stages.for_phase(cfg.phase):  # layered → migrating 都是階段 5：剛才已經印過
+        print(f"遷移階段：{args.phase}。做法同上一個階段：{stages.shown(stage)}（已經讀過就不用再讀）")
+    else:
+        print(f"遷移階段：{args.phase}\n\n【{stages.shown(stage)}（階段 {stage} 的做法，已附上全文，不用再讀）】\n{stages.text(stage)}")
     return 0
 
 
@@ -406,7 +423,7 @@ def hook_pre_bash(event: hosts.Event, cfg: Config) -> int:
     if report.hard:
         texts.append(f"【AIR：上一個指令改的檔案違反規則（修改已經寫入，必須修正）】\n"
                      + "\n".join(format_grouped(report.hard, cfg.root, limit=STOP_GROUPS)) + f"\n{FIX_HINT}")
-    texts.append(context.rules_to_inject(cfg, event.session_id, changed, lead="你剛用指令改了"))
+    texts.append(context.rules_to_inject(cfg, event.session_id, [p for p in changed if context.has_logic(p)], lead="你剛用指令改了"))
     if not event.host.rules_dir:
         texts.append(context.rules_to_inject(cfg, event.session_id, context.paths_in_command(cfg, event.command), lead="這個指令會動到"))
     texts = [t for t in texts if t]

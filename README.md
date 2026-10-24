@@ -50,7 +50,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 工具 | hook 設定 | skills | 差異 |
 |---|---|---|---|
 | Claude Code（Grok Build 讀同一份設定） | `.claude/settings.json` | `.claude/skills/` | 五個 hook；各層規則放在 `.claude/rules/air-<層>.md`，讀寫該層時由 Claude Code 自己載入（不啟動 Python），用 Bash 改了某一層時由 hook 補附；修改 `.air/project.toml` 會跳出確認 |
-| Codex | `.codex/hooks.json` | `.agents/skills/` | 五個 hook；各層規則在第一次修改該層時由 hook 附上（編輯工具，或指令裡提到該層、上一個指令改了該層）；不支援確認，改成提醒；**hook 要在 Codex 裡信任過才會執行** |
+| Codex | `.codex/hooks.json` | `.agents/skills/` | 五個 hook；各層規則在第一次修改該層時由 hook 附上（編輯工具，或指令裡提到該層、上一個指令改了該層；只建空的 `__init__.py` 或轉接檔不算）；不支援確認，改成提醒；**hook 要在 Codex 裡信任過才會執行** |
 
 只用其中一種：`sh AIR/install.sh --host claude`（或 `--host codex`）。`python3 AIR/air.py doctor` 列出每個工具的接線狀態。
 

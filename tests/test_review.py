@@ -122,7 +122,9 @@ class TestScope(ReviewCase):
         self.assertIn("只審程式抓不到的部分：", out)  # STEP-2 的缺口
         self.assertIn(f"git diff --no-renames {self.base[:12]} -- demo/flows/report.py", out)
         self.assertIn("新檔案（整個檔案都在範圍，直接讀）：demo/steps/calc.py", out)
-        self.assertIn("review --result -", out)
+        self.assertIn("batch finish --note", out)                    # 遷移中：審查跟這批的收尾一次交
+        self.assertNotIn("review --result -", out)
+        self.assertIn('交回格式（JSON）：{"findings": [{"rule": ', out)  # 格式就在這裡，不用為了它讀 skill
 
     def test_rules_are_printed_once_per_layer(self):
         # 實測一批 12 個模組的範圍輸出有 61% 是重複的規則文字：規則每層只印一次，底下列檔案
@@ -153,7 +155,8 @@ class TestScope(ReviewCase):
         self.assertNotIn("看差異：git diff", out)
         self.assertNotIn("直接讀）", out)
         self.assertLess(out.index("【flows 的規則】"), out.index("── 差異"))  # 規則在前，差異在後
-        self.assertIn("review --result -", out)
+        self.assertLess(out.index("交回格式（JSON）"), out.index("── 差異"))  # 交回的方法也在差異前面：截短時還在
+        self.assertIn("batch finish --note", out)
         sc = self.scope("--bundle")
         self.assertTrue(all("diff" in f for f in sc["files"]))
         self.assertTrue(all("diff" not in f for f in self.scope()["files"]))
@@ -203,6 +206,17 @@ class TestScope(ReviewCase):
         self.assertEqual(self.scope()["fingerprint"], a)
         self.p.write("demo/steps/calc.py", STEP_NEW + "\n")
         self.assertNotEqual(self.scope()["fingerprint"], a)
+
+
+class TestSubmitHintOutsideMigration(ReviewCase):
+    phase = "layered"
+
+    def test_review_result_outside_migration(self):
+        self.p.write("demo/steps/calc.py", STEP_NEW)
+        out = self.p.air("review", "--bundle").stdout
+        self.assertIn("審完交回：python3 AIR/air.py review --result -", out)
+        self.assertNotIn("batch finish", out)
+        self.assertIn("交回格式（JSON）", out)
 
 
 class TestScopeWithoutHistory(ProjectTestCase):

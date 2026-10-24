@@ -1,4 +1,4 @@
-"""按需注入（沒有路徑規則的宿主，目前是 Codex）：第一次編輯某一層的檔案時，把那一層的規則附給 AI（additionalContext）；
+"""按需注入（沒有路徑規則的宿主，目前是 Codex）：第一次在某一層寫程式時，把那一層的規則附給 AI（additionalContext）；
 session 開始與壓縮後重置，並附上目前狀態。
 
 Claude Code 不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rules/air-<層>.md（帶 paths 前言，見 install.py），
@@ -13,6 +13,9 @@ Claude Code 不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rul
   seen      套件與測試目錄裡 git 看得到變更的檔案與它們的 (mtime, 大小)：每次 Bash 前比對，找出上一個 Bash 改了哪些檔案
             （試跑中 AI 幾乎都用 Bash 改檔，編輯工具的 hook 不會觸發：規則送不到、改完也沒有檢查）
   fired     每個 hook 觸發的次數與最後一次的時間（status、doctor 顯示），分得出「沒有違規」與「hook 沒跑」
+
+規則只在那一層第一次出現自己的程式時附（has_logic）：第二輪試跑（2026-10-24，v3.2.2）AI 在建立分層時用一個指令建好六層空的
+__init__.py，hook 就一次附上六份規則（4,521 字），8 次 Claude 試跑都是，之後每次呼叫都背著；空的套件標記與轉接檔用不到規則。
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import re
 import time
 from pathlib import Path
 
-from . import hooklog, project, stages, verify
+from . import hooklog, legacy, project, stages, verify
 from .checks import layer_files, rel
 from .config import KIT_DIR, Config
 from .hosts import Host
@@ -189,13 +192,22 @@ def bash_changes(cfg: Config, session_id: str) -> list[Path]:
     return [cfg.root / name for name, st in sorted(now.items()) if before.get(name) != st]
 
 
+def has_logic(path: Path) -> bool:
+    """這個檔案有自己的程式（不是空的套件標記、也不是只有 import 的轉接檔）：只有這種檔案才需要那一層的規則。"""
+    return path.suffix == ".py" and path.is_file() and legacy.kind(path) == legacy.LOGIC
+
+
 def paths_in_command(cfg: Config, command: str) -> list[Path]:
     """指令裡提到的層目錄與測試目錄（相對根目錄的寫法，例如 demo/steps/x.py）：Codex 沒有路徑規則，碰到之前先附那一層的規則。
-    每個提到的目錄給一個代表路徑，交給 rules_to_inject 判斷是哪一份規則。"""
+    每個提到的目錄給一個代表路徑，交給 rules_to_inject 判斷是哪一份規則。只建目錄或 __init__.py 的指令（建立分層）不算：
+    指令點名了那一層裡 __init__.py 以外的 .py，或那一層已經有自己的程式，才附。"""
     out = []
     for base in [*(la.path for la in cfg.layers.values()), cfg.tests_dir]:
-        r = rel(base, cfg.root)
-        if re.search(rf"(?<![\w.-]){re.escape(r)}(?![\w-])", command):
+        r = re.escape(rel(base, cfg.root))
+        if not re.search(rf"(?<![\w.-]){r}(?![\w-])", command):
+            continue
+        named = re.findall(rf"(?<![\w.-]){r}/((?:[\w.-]+/)*[\w.-]+\.py)(?![\w-])", command)
+        if any(Path(n).name != "__init__.py" for n in named) or any(has_logic(p) for p in sorted(base.rglob("*.py"))):
             out.append(base / "__init__.py")
     return out
 
@@ -230,7 +242,7 @@ def rules_to_inject(cfg: Config, session_id: str, paths, lead: str = "你正要�
 
 
 def stage_text(stage: int) -> str:
-    """AIR/start/ 裡那一個階段的全文。只附當下的階段：六份合計約 5,900 字，其他五份跟當下無關。"""
+    """AIR/start/ 裡那一個階段的全文。只附當下的階段：六份合計約 6,100 字，其他五份跟當下無關。"""
     return stages.text(stage)
 
 
@@ -239,7 +251,7 @@ def session_context(cfg: Config, host: Host | None = None) -> str:
     if host is not None and host.rules_dir:
         how = f"讀寫某一層的檔案時，{host.label} 會自動載入 {host.rules_dir.as_posix()}/air-<層>.md（AIR/rules/<層>.md 的複本）"
     else:
-        how = "第一次修改某一層的檔案時，hook 會附上那一層的規則（AIR/rules/<層>.md）"
+        how = "第一次在某一層寫程式時（只建空的 __init__.py 不算），hook 會附上那一層的規則（AIR/rules/<層>.md）"
     pause = project.paused(cfg.root)
     if pause is not None:  # 暫停中：不催該階段的事，也不附階段的做法；新程式仍要寫進對應的層
         guide = (f"遷移暫停中（{project.describe_pause(pause)}；階段 {cfg.phase} 保留）：照一般開發進行，新程式仍寫進對應的層，"

@@ -252,7 +252,15 @@ def _ranges(lines: list[list[int]] | None) -> str:
     return "整個檔案" if lines is None else "、".join(f"{a}–{b}" if a != b else str(a) for a, b in lines)
 
 
-def format_scope(sc: dict) -> str:
+RESULT_FORMAT = (  # 交回的格式：附在範圍後面、差異前面，輸出截短也還在；第二輪試跑 AI 為了它去讀 skill（1 → 7 次）
+    '交回格式（JSON）：{"findings": [{"rule": "上面列的規則編號", "title": "…", "body": "哪裡、為什麼違反、怎麼修", "confidence": 0.8, '
+    '"priority": 1, "path": "上面列的檔案", "lines": {"start": 12, "end": 15}}], "overall": "pass", "explanation": "…"}\n'
+    "  只報這次變更引入、信心 0.5 以上、指得出行號的；沒有就 \"findings\": []。priority：0 層的保證失效、1 違反【必須】、"
+    "2 違反【建議】、3 提醒；有 0 或 1 時 overall 是 fail。完整說明在 skill air-review，照這裡交就不用再讀。"
+)
+
+
+def format_scope(sc: dict, migrating: bool = False) -> str:
     against = f"相對 {sc['base']}（merge-base {sc['ref'][:12]}）" if sc["base"] else (
         f"相對 HEAD {sc['ref'][:12]}" if sc["ref"] else "還沒有 commit，所有檔案都算新的")
     lines = [f"AIR 語意審查範圍：{against}，含未 commit 的修改"]
@@ -279,7 +287,11 @@ def format_scope(sc: dict) -> str:
     tracked = [f["path"] for f in todo if f["status"] != "untracked"]
     fresh = [f["path"] for f in todo if f["status"] == "untracked"]
     bundled = [f for f in todo if "diff" in f]
+    submit = ("""python3 AIR/air.py batch finish --note "第 N 批：…" --review - <<'EOF' … EOF（遷移中：審查與這批的收尾一次交）"""
+              if migrating else "python3 AIR/air.py review --result - <<'EOF' … EOF")
+    how = f"審完交回：{submit}；只交這次審的檔案，沿用的不用再列。\n{RESULT_FORMAT}"  # 只在有待審檔案時用到
     if bundled:
+        lines.append(how)  # 放在差異前面：差異很長、輸出被截短時，交回的方法還在
         lines.append(f"── 差異（--bundle：底下 {len(bundled)} 個待審檔案的差異都在這裡，不用再跑 git diff 或讀檔；新檔案是整個內容加行號，搬移過來的是差異加大綱）")
         for f in bundled:
             if "moved_from" in f:
@@ -297,10 +309,8 @@ def format_scope(sc: dict) -> str:
         if fresh:
             lines.append("新檔案（整個檔案都在範圍，直接讀）：" + " ".join(fresh))
         if todo:
-            lines.append("一次拿齊範圍與差異：python3 AIR/air.py review --bundle")
-    if todo:
-        lines.append("審完交回：python3 AIR/air.py review --result - <<'EOF' … EOF（JSON 格式見 skill air-review；只交這次審的檔案，沿用的不用再列）")
-    elif reused:
+            lines += ["一次拿齊範圍與差異：python3 AIR/air.py review --bundle", how]
+    if not todo and reused:
         lines.append("全部沿用，沒有要重審的檔案；紀錄與目前的變更一致。")
     return "\n".join(lines)
 

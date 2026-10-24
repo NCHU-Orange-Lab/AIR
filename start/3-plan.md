@@ -12,4 +12,4 @@
 3. 每批控制在使用者能一次審閱完的大小，一批一個 commit。
 4. `python3 AIR/air.py phase planned`
 
-**停下來**，等使用者核准計畫。核准後進入階段 4：讀 `AIR/start/4-layers.md`。
+**停下來**，等使用者核准計畫。核准後進入階段 4：做法就是 `phase planned` 印出的 `AIR/start/4-layers.md` 全文（換了 session 由 hook 附上），不用再讀檔。

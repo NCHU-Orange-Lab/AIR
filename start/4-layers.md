@@ -9,4 +9,4 @@
 3. `python3 AIR/air.py verify`：必須通過。建立分層可能弄壞專案（`check` 看不出來，要跑測試才知道）。
 4. `python3 AIR/air.py phase layered`（會確認層目錄都存在、檢查通過、驗收新鮮且通過），然後 commit：`AIR：建立分層`。
 
-**停下來**，等使用者核准後開始第 1 批：讀 `AIR/start/5-migrate.md`。
+**停下來**，等使用者核准後開始第 1 批：做法就是 `phase layered` 印出的 `AIR/start/5-migrate.md` 全文（換了 session 由 hook 附上），不用再讀檔。

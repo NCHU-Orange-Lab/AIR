@@ -11,7 +11,7 @@
    - 讓舊的 import 路徑繼續可用：在原本的舊模組裡保留轉接（`from shop.steps.orders import valid_orders`），呼叫端就不用一次全改。轉接在收尾時移除。
    - 新的層 import 了還沒搬的舊模組時，檢查會回報 AIR008。只有在這一批真的沒辦法先搬時，才**經使用者同意**加進 `migration.allow-legacy`，並寫上原因。搬完之後那一筆就不需要了：`verify` 與 `doctor` 會列出已經沒有 import 用到的條目，經使用者同意後從 `.air/project.toml` 移除。新程式一律寫進對應的層：`verify` 也會列出起點（上一批結束或進入 migrating）之後在層外新增、有自己程式的檔案；先拆再搬的話搬完就會消失，刻意放在層外的要經使用者同意加進 `migration.exclude`。
 3. **驗證**：`python3 AIR/air.py verify` 必須通過。它會執行專案的測試指令（失敗都在既有失敗基準裡就算通過）、黃金重播與架構檢查，並把結果綁定這一版程式碼記在 `.air/branches/<分支>/verify.json`；只跑 `check` 不算驗證。重播的輸出變了就是行為變了：找原因，不要重錄。
-4. **語意審查**：照 skill `air-review` 審（`python3 AIR/air.py review --bundle` 列出這批改到的檔案要對照哪些沒有程式檢查的規則，連差異一起印；搬移過來的檔案只附差異與大綱）。結果先不用另外交回，第 6 步一起交。
+4. **語意審查**：`python3 AIR/air.py review --bundle` 列出這批改到的檔案要對照哪些沒有程式檢查的規則、交回的格式，連差異一起印（搬移過來的檔案只附差異與大綱）；照它逐條對照，交回格式已經附上，不用另外讀 skill `air-review`。結果先不用另外交回，第 6 步一起交。
 5. 更新遷移報告的「進度」一節。
 6. **結束這一批**（還沒 commit）：`python3 AIR/air.py batch finish --note "第 N 批：<內容>" --review - <<'EOF'` 接審查結果的 JSON、`EOF`。它一次做完：驗收紀錄與目前程式碼一致就沿用，否則重跑 verify；驗證並記錄審查結果；把這批的代理指標（搬了幾檔幾行、審查範圍的字數、verify 幾次多久、擋下幾次、剩餘舊模組）記進 `.air/history.jsonl`。審查結果無效會列出原因（驗收不用重跑）；還有沒處理的 priority 0、1 會拒絕：處理後重跑 `review --bundle`（只有改過的檔案要重審）再 finish，確定不處理要向使用者說明、經同意後加 `--ack "理由"`。
 7. **commit**：照 finish 印出的指令，`.air/history.jsonl` 跟這一批一起 commit：`AIR 遷移第 N 批：<內容>`。`python3 AIR/air.py batch list` 可以看每一批的成本，改版前後可以比較。

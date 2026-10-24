@@ -73,7 +73,22 @@ class TestPointers(ProjectTestCase):
         self.p.write(".air/project.toml", self.p.root.joinpath(".air/project.toml").read_text(encoding="utf-8").replace('command = ""', 'command = "true"'))
         r = self.p.air("phase", "analyzed")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("這個階段的做法：AIR/start/3-plan.md（只讀這一份）", r.stdout)
+        self.assertIn("【AIR/start/3-plan.md（階段 3 的做法，已附上全文，不用再讀）】", r.stdout)
+        self.assertIn(stages.text(3), r.stdout)                      # 全文：session 中途換階段，SessionStart 不會再附
+
+    def test_same_stage_is_not_printed_twice(self):
+        # layered → migrating 都是階段 5：建立分層時已經印過 5-migrate.md
+        project.set_phase(self.p.cfg(), "layered")
+        r = self.p.air("phase", "migrating")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("做法同上一個階段：AIR/start/5-migrate.md（已經讀過就不用再讀）", r.stdout)
+        self.assertNotIn(stages.text(5), r.stdout)
+
+    def test_done_prints_no_stage(self):
+        project.set_phase(self.p.cfg(), "migrating")
+        r = self.p.air("phase", "done", "--force", "--reason", "測試")
+        self.assertIn("遷移階段：done", r.stdout)
+        self.assertNotIn("做法", r.stdout)
 
     def test_install_names_the_analysis_file(self):
         r = self.p.air("install", "--package", "demo", "--package-dir", "demo", "--host", "claude")
