@@ -178,7 +178,7 @@ def _stale_rules(root: Path, cfg: Config | None) -> list[Item]:
             stale.append(dest.relative_to(root).as_posix())
     if not stale:
         return []
-    return [Item(WARN, "規則", f"舊版留下的規則檔 {'、'.join(stale)}（規則改由 hook 注入）。{REINSTALL} 會移除")]
+    return [Item(WARN, "規則", f"舊版留下的規則檔 {'、'.join(stale)}（規則改由 .claude/rules 或 hook 送達）。{REINSTALL} 會移除")]
 
 
 def _smoke(root: Path, host: hosts.Host) -> list[Item]:

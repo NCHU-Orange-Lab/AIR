@@ -1,5 +1,5 @@
 """按需注入（context.py）：沒有路徑規則的宿主（Codex）第一次編輯某層時附上那層的規則，同一個 session 只附一次；
-Claude Code 不經 hook，由 .claude/rules/air-<層>.md 自己載入（install.py）。session 開始／壓縮後重置並附上狀態。"""
+Claude Code 的編輯工具不經 hook，由 .claude/rules/air-<層>.md 自己載入（install.py；用 Bash 改的見 test_bash_hooks.py）。session 開始／壓縮後重置並附上狀態。"""
 
 import json
 import os
@@ -109,7 +109,7 @@ class TestInjection(ProjectTestCase):
 
 
 class TestSessionRecord(ProjectTestCase):
-    """session 紀錄的三件事：rules（注入過的規則）、touched（編輯工具動過的檔案）、snapshot（開始時各層檔案的雜湊）。"""
+    """session 紀錄裡的 rules（注入過的規則）、touched（編輯工具動過的檔案）、snapshot（開始時各層檔案的雜湊）；seen 與 fired 見 test_bash_hooks.py。"""
     phase = "migrating"
 
     def setUp(self):

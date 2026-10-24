@@ -1,11 +1,11 @@
 """按需注入（沒有路徑規則的宿主，目前是 Codex）：第一次在某一層寫程式時，把那一層的規則附給 AI（additionalContext）；
 session 開始與壓縮後重置，並附上目前狀態。
 
-Claude Code 不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rules/air-<層>.md（帶 paths 前言，見 install.py），
+Claude Code 平常不走這裡：安裝時把 AIR/rules/<層>.md 複製成 .claude/rules/air-<層>.md（帶 paths 前言，見 install.py），
 讀寫該層的檔案時由宿主自己載入，不啟動 Python（實測每次 Read 多一個 Python 行程，Windows 上約 0.36 秒）。
-規則仍只有 AIR/rules/ 一個來源。
+只有用 Bash 改了某一層、宿主沒有讀那個檔案時，下一次 Bash 前由 pre-bash 補附。規則仍只有 AIR/rules/ 一個來源。
 
-.air/sessions/<session_id>.json（不進版本控制）記三件事：
+.air/sessions/<session_id>.json（不進版本控制）記這些：
   rules     這個 session 已附過哪些層的規則（Codex）；session 開始與壓縮後清掉
   touched   編輯工具動過的檔案（post-edit 記下）
   snapshot  session 第一次開始時各層 .py 的內容雜湊：結束前用它找出「這個 session 開始後才變的檔案」，

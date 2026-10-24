@@ -102,7 +102,8 @@ class TestFinish(FinishCase):
 
 
 class TestOldPathHints(FinishCase):
-    """第二輪試跑：Codex 8 次裡只有 1 次用 batch finish，其餘走 review --result、commit、batch close，還去讀 batch.py 找用法。"""
+    """第二輪試跑：Codex 8 次裡只有 1 次用 batch finish，其餘走 review --result、commit、batch close，還去讀 batch.py 找用法
+    （第三輪查出主要是試跑提示詞要它用 batch close；這個提示是保險）。"""
 
     def test_review_result_and_close_point_to_finish(self):
         self.p.write("demo/steps/calc.py", "def double(x: int) -> int:\n    return 2 * x\n")
