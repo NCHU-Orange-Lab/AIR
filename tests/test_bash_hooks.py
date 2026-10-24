@@ -57,13 +57,27 @@ class TestBashEdits(BashCase):
 
     def test_layer_changed_by_bash_gets_its_rules_once(self):
         self.start()
-        self.p.write("demo/adapters/tool.py", "import requests\n")
+        self.p.write("demo/adapters/tool.py", "import requests\n\n\ndef get(url: str) -> str:\n    return requests.get(url).text\n")
         text = self.pre_bash()
         self.assertIn("【AIR：你剛用指令改了 adapters 的檔案", text)
         self.assertIn("ADP-1", text)
         self.assertNotIn("違反規則", text)                           # adapters 可以 import 第三方
-        self.p.write("demo/adapters/other.py", "import os\n")
+        self.p.write("demo/adapters/other.py", "import os\n\nHOME = os.sep\n")
         self.assertEqual(self.pre_bash(), "")                       # 同一層只附一次
+
+    def test_creating_empty_layers_attaches_no_rules(self):
+        # 第二輪試跑：建立分層時一個指令建好六層空的 __init__.py，hook 一次附上六份規則（4,521 字），之後每次呼叫都背著
+        self.start()
+        for name in ("contracts", "flows", "storage", "main"):
+            self.p.write(f"demo/{name}/__init__.py", "")
+        self.p.write("demo/contracts/types.py", '"""跨層的資料型別。"""\n')   # 只有 docstring：還不是程式
+        self.p.write("demo/flows/__init__.py", "from demo.flows import report  # noqa\n")  # 只有 import：轉接
+        self.assertEqual(self.pre_bash(), "")
+        self.p.write("demo/contracts/types.py", '"""跨層的資料型別。"""\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass Order:\n    amount: int\n')
+        text = self.pre_bash()                                      # 真的寫了程式：這時才附，而且只附那一層
+        self.assertIn("【AIR：你剛用指令改了 contracts 的檔案", text)
+        self.assertNotIn("flows 的檔案", text)
+        self.assertNotIn("storage 的檔案", text)
 
     def test_without_a_baseline_nothing_is_reported(self):
         # session 開始時還沒裝好（沒有基準）：第一次只記基準
@@ -84,6 +98,18 @@ class TestCommandPaths(BashCase):
     def test_claude_reads_rules_from_dot_claude_rules(self):
         self.start()
         self.assertEqual(self.pre_bash("cat demo/steps/ok.py"), "")
+
+    def test_codex_creating_empty_layers_gets_no_rules(self):
+        self.start(host="codex")
+        cmd = "mkdir -p demo/contracts demo/flows && touch demo/contracts/__init__.py demo/flows/__init__.py"
+        self.assertEqual(self.pre_bash(cmd, host="codex"), "")
+        self.assertEqual(self.pre_bash("ls demo/flows", host="codex"), "")      # 那一層還沒有程式
+        text = self.pre_bash("cat > demo/flows/report.py <<'EOF'\ndef run() -> None:\n    return None\nEOF", host="codex")
+        self.assertIn("【AIR：這個指令會動到 flows 的檔案", text)            # 點名了 __init__.py 以外的 .py
+
+    def test_codex_reading_a_layer_with_code_gets_its_rules(self):
+        self.start(host="codex")
+        self.assertIn("【AIR：這個指令會動到 steps 的檔案", self.pre_bash("ls demo/steps", host="codex"))  # ok.py 是程式
 
     def test_similar_names_do_not_match(self):
         self.start(host="codex")

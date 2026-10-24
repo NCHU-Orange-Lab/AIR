@@ -17,7 +17,7 @@ description: 每批遷移 commit 前，或使用者要求依 AIR 規則審查變
    - **具體可修**，指得出檔案與行。「可能影響別處」要指出具體位置才算。
    - **有把握**：信心 0–1，不到 0.5 的不報；拿不準就不報，沒有就交 `findings: []`，不要硬湊。
    - 只依列出的規則判斷，不加規則以外的偏好。
-5. 交回結果（格式如下）。遷移的批次結束時跟 `batch finish` 一起交（`python3 AIR/air.py batch finish --note "…" --review - <<'EOF'`），其他時候用 `review --result`。無效會被拒絕並列出原因，修正後再交；通過驗證才會記錄。
+5. 交回結果（格式如下；`review` 的輸出也附了精簡版）。遷移的批次結束時跟 `batch finish` 一起交（`python3 AIR/air.py batch finish --note "…" --review - <<'EOF'`），其他時候用 `review --result`。無效會被拒絕並列出原因，修正後再交；通過驗證才會記錄。
    ```sh
    python3 AIR/air.py review --result - <<'EOF'
    { ... }

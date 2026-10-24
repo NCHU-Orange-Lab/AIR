@@ -101,6 +101,38 @@ class TestFinish(FinishCase):
         self.assertIn("--review 只用在 batch finish", r.stderr)
 
 
+class TestOldPathHints(FinishCase):
+    """第二輪試跑：Codex 8 次裡只有 1 次用 batch finish，其餘走 review --result、commit、batch close，還去讀 batch.py 找用法。"""
+
+    def test_review_result_and_close_point_to_finish(self):
+        self.p.write("demo/steps/calc.py", "def double(x: int) -> int:\n    return 2 * x\n")
+        r = self.p.air("review", "--result", "-", stdin=PASS)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("下一批改用 batch finish", r.stdout)
+        self.assertNotIn("下一批改用", self.p.air("review", "--result", "-", "--json", stdin=PASS).stdout)  # 給程式讀的不加
+        self.assertEqual(self.p.air("verify").returncode, 0)
+        r = self.p.air("batch", "close", "--note", "第 1 批")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("下一批改用 batch finish", r.stdout)
+
+    def test_finish_itself_has_no_hint(self):
+        self.p.write("demo/steps/calc.py", "def double(x: int) -> int:\n    return 2 * x\n")
+        r = self.finish("--note", "第 1 批", "--review", "-", stdin=PASS)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("下一批改用", r.stdout)
+
+
+class TestReviewHintOutsideMigration(ProjectTestCase):
+    phase = "layered"
+    git = True
+
+    def test_no_finish_hint_before_migrating(self):
+        self.p.layer("steps", calc="def double(x: int) -> int:\n    return 2 * x\n")
+        r = self.p.air("review", "--result", "-", stdin=PASS)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("batch finish", r.stdout)
+
+
 class TestWindowAfterFinish(FinishCase):
     def test_next_batch_starts_at_the_commit_that_contains_the_entry(self):
         self.p.write("demo/steps/calc.py", "def double(x: int) -> int:\n    return 2 * x\n")
