@@ -1,7 +1,7 @@
 """測試共用：建立隔離的暫存專案，直接呼叫 airkit 或執行 air.py。
 
 只用標準庫（unittest），跟套件一樣零依賴：
-  python3 -m unittest discover -s tests          # 在 AIR/ 目錄下執行
+  python3 -m unittest discover -s tests -t .     # 在開發 repo 的根目錄執行（裝進專案後是 AIR/）
 """
 
 from __future__ import annotations

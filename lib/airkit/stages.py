@@ -2,7 +2,7 @@
 
 試跑（2026-10-24，4 個深度學習專案、Claude 與 Codex 各 16 次）：AI 一開始就把整份 START.md（6,255 字，約 9 千到 1.1 萬 token）讀進對話，
 之後二十幾次呼叫都背著它，佔 AIR 多出的 token 將近一半。SessionStart 只附當下那一節原本就有，但 session 開始時還沒安裝
-（或安裝失敗）就不會附；所以拆成檔案，status、install、phase 的輸出直接指出下一份，不靠 hook 也只讀得到需要的那一份。
+（或安裝失敗）就不會附；所以拆成檔案，status、install 的輸出指出下一份、phase 推進時直接印出下一份的全文，不靠 hook 也只讀得到需要的那一份。
 """
 
 from __future__ import annotations

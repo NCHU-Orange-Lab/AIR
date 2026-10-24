@@ -7,7 +7,7 @@ air.py 用這裡的 parse() 把 payload 正規化成 Event，處理完再用該�
   claude  Claude Code：.claude/settings.json、.claude/skills/、.claude/rules/（各層規則用宿主內建的路徑規則載入，
           不經 hook、不啟動 Python）。Grok Build 讀同一份設定（相容 Claude Code 的 hook），欄位名稱的差異（stopHookActive）在 parse() 處理。
   codex   Codex：.codex/hooks.json、.agents/skills/。沒有 $CLAUDE_PROJECT_DIR、沒有 Read 工具、沒有路徑規則
-          （各層規則由 pre-edit hook 在第一次編輯該層時附上）、PreToolUse 不支援 permissionDecision: ask（改成提醒）；
+          （各層規則由 pre-edit 與 pre-bash hook 在第一次修改該層時附上）、PreToolUse 不支援 permissionDecision: ask（改成提醒）；
           hook 要在 Codex 裡信任過才會執行。
 """
 
@@ -59,7 +59,7 @@ CODEX = Host(
     hooks_file=Path(".codex") / "hooks.json", skills_dir=Path(".agents") / "skills",
     # Codex 的 hook 沒有 $CLAUDE_PROJECT_DIR，工作目錄是 session 的 cwd：用 git 找根目錄，不是 git repo 就用 cwd
     root_expr='"$(git rev-parse --show-toplevel 2>/dev/null || pwd)"', supports_ask=False,
-    scripts=SCRIPTS,  # 沒有路徑規則：各層規則由 pre_edit.sh 在第一次編輯該層時附上（context.py）
+    scripts=SCRIPTS,  # 沒有路徑規則：各層規則由 pre_edit.sh 與 pre_bash.sh 在第一次修改該層時附上（context.py）
     description="AIR 規範檢查（由 AIR/install.sh 產生；AIR 的項目請勿手動修改）",
     note="Codex 要在它的 hooks 信任介面裡信任這些 hook 才會執行；AIR 更新後 hook 設定有變動時要重新信任。",
 )

@@ -22,7 +22,7 @@ contracts/                     跨層的型別與介面
 
 ## 怎麼開始
 
-1. 把 `AIR/` 資料夾複製到專案根目錄（git repo 的根目錄）。**不要帶著 `.git`**：從 AIR-dev 複製時，只複製裡面的 `AIR/` 資料夾。
+1. 取得套件：下載 [GitHub release](https://github.com/alenzenx/AIR/releases) 的原始碼並解壓（或 clone 之後刪掉 `.git`），把資料夾改名為 `AIR/`，放到專案根目錄（git repo 的根目錄）。開發 repo 的根目錄就是套件本身，沒有另一層 `AIR/`。**不要帶著 `.git`**（安裝程式會擋下）；`tests/`、`.github/` 可以不帶，隱藏檔 `.gitignore`、`.gitattributes` 要一起帶（列在 `MANIFEST.sha256` 裡）。
 2. 工作樹不用乾淨：安裝程式最後會列出它建立或修改的檔案，commit 時只加那些。其中有被專案的 `.gitignore` 忽略的（例如忽略了 `.claude/`），安裝程式與 `doctor` 會列出來；`AIR/` 自帶的 `.gitignore` 讓它不受 `lib/` 這類規則影響。
 3. 對 AI 說：**「照 AIR/START.md 安裝」**
 
@@ -71,7 +71,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | `.air/test-baseline.json` | 既有失敗基準：遷移前本來就失敗的測試清單（`verify --record-baseline` 產生） | 是 |
 | `.air/golden.json` | 黃金重播記下的輸出雜湊（`golden record` 產生） | 是 |
 | `.air/python`、`.air/hosts` | 這台電腦的 Python 路徑、裝了哪些工具的接點 | 否 |
-| `.air/sessions/` | 每個 session 的紀錄：已附過哪一層的規則（Codex）、編輯工具動過的檔案、開始時各層檔案的快照（結束前的檢查用） | 否 |
+| `.air/sessions/` | 每個 session 的紀錄：已附過哪一層的規則（Codex；Claude Code 只有用 Bash 改了某一層時）、編輯工具動過的檔案、開始時各層檔案的快照（結束前的檢查用）、上一次 Bash 時套件與測試目錄的變更、每個 hook 觸發的次數（`status`、`doctor` 顯示） | 否 |
 | `.air/hook-errors.log` | hook 自己壞掉的紀錄（找不到 Python、payload 壞掉）；`status` 與 `doctor` 會顯示最近 24 小時的次數 | 否 |
 | `.air/metrics.jsonl` | 成本的代理指標：verify 幾次、審查範圍印了多少字、擋下幾次；`status` 顯示累計 | 否 |
 | `.air/out/` | 超過輸出上限（`[output] max-chars`，預設 4,000 字）的指令輸出全文；畫面只印開頭與檔案位置 | 否 |
@@ -85,7 +85,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 
 ## 更新與移除
 
-- **更新**：用新版的 `AIR/` 整包取代舊的，再執行 `sh AIR/install.sh`。`.air/project.toml` 和遷移報告都會保留；2.2 以前放在各層目錄的 `CLAUDE.md` 會被移除；2.6.1 以前 Claude Code 讀檔前的 hook 會被移除、改成產生 `.claude/rules/air-<層>.md`；2.7 起測試指令改放 `[tests]`，舊的 `project.test-command` 仍可用（`doctor` 會提醒搬過去）。Codex 的 hook 設定變動後要重新信任。
+- **更新**：用新版的 `AIR/` 整包取代舊的，再執行 `sh AIR/install.sh`，然後把安裝程式列出的路徑 commit 進去（`doctor` 的「版本控制」會列出還沒 commit 或被 `.gitignore` 忽略的檔案；3.2.4 以前裝在有 `lib/` 規則的專案，`AIR/lib/` 可能從來沒被 commit）。`.air/project.toml` 和遷移報告都會保留；2.2 以前放在各層目錄的 `CLAUDE.md` 會被移除；2.6.1 以前 Claude Code 讀檔前的 hook 會被移除、改成產生 `.claude/rules/air-<層>.md`；2.7 起測試指令改放 `[tests]`，舊的 `project.test-command` 仍可用（`doctor` 會提醒搬過去）。Codex 的 hook 設定變動後要重新信任。
 - **移除**：`sh AIR/uninstall.sh`。會移除所有標記區塊、hook、skill 與 `.claude/rules/air-*.md`；`.air/` 與遷移報告會保留，加上 `--purge` 才會刪除。已經搬進各層的程式碼不會被動到。
 
 ## 常用指令
@@ -95,7 +95,7 @@ AI 會分 6 個階段進行，**每個階段結束都會停下來等你核准**�
 | 指令 | 做什麼 |
 |---|---|
 | `python3 AIR/air.py status` | 本機時間、套件、遷移階段與現在該讀的階段檔、分支、檢查範圍、違規數、hook 錯誤與最近一個 session 每個 hook 觸發幾次、成本指標、最近驗收與審查；常駐內容到 80% 以上時多一行 |
-| `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查；常駐內容到 80% 以上也會列出 |
+| `python3 AIR/air.py doctor` | 診斷接線：每個工具的 hook 與 skill（真的跑一次）、指引、套件完整性、commit 前檢查、`AIR/` 與接點有沒有進版本控制（被 `.gitignore` 忽略或還沒 commit）；常駐內容到 80% 以上也會列出 |
 | `python3 AIR/air.py doctor --context` | 常駐內容的完整盤點：各工具一開場載入的檔案（CLAUDE.md 鏈、沒有 `paths` 的規則、自動記憶索引、Codex 的 AGENTS.md 鏈）、大小、上限與佔比、AIR 區塊的位置 |
 | `python3 AIR/air.py check` | 快速檢查所有層；同一種違規只印一次修法（加 `--json` 得到逐條的機器可讀結果） |
 | `python3 AIR/air.py verify` | 正式驗收：測試指令＋架構檢查＋黃金重播，結果記在 `.air/branches/<分支>/verify.json`（會跑整套測試）。`[tests]` 有設 `results` 時，失敗都在既有失敗基準裡就算通過 |

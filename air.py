@@ -20,8 +20,8 @@
   python3 AIR/air.py install [--package P --package-dir D] [--host claude|codex ...]
                                              安裝接點（不指定 --host 時裝所有支援的宿主；最後列出要 commit 的路徑，工作樹不用先清乾淨）
   python3 AIR/air.py uninstall [--purge]
-  python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查，
-                                             以及常駐內容到 80% 以上的警告
+  python3 AIR/air.py doctor [--json]         診斷接線：Python、設定、套件完整性、指引、每個宿主的 hook 與 skill、commit 前檢查、
+                                             AIR 與接點有沒有進版本控制，以及常駐內容到 80% 以上的警告
   python3 AIR/air.py doctor --context [--json] 常駐內容的完整盤點：各宿主一開場載入的檔案、大小、上限與佔比、AIR 區塊的位置
   python3 AIR/air.py layers [層 ...] [--adopt-module 層]
                                              建立分層目錄（預設全部）；專案已有同名的 <層>.py 會拒絕，--adopt-module 把它搬成 <層>/__init__.py
@@ -129,7 +129,7 @@ def cmd_batch(args) -> int:
 
 
 # 舊的兩步（review --result、commit、batch close）仍然可用；第二輪試跑 Codex 8 次裡只有 1 次用 batch finish，
-# 其餘去讀 batch.py 的原始碼找 close 怎麼用。走舊路時提示一次新的一步
+# 其餘去讀 batch.py 的原始碼找 close 怎麼用（第三輪查出主要是試跑提示詞要它用 batch close）。走舊路時提示一次新的一步，當作保險
 FINISH_HINT = ("下一批改用 batch finish：在 commit 之前一個指令做完驗收、交回審查與紀錄"
                """（python3 AIR/air.py batch finish --note "第 N 批：…" --review - <<'EOF' … EOF），不用再分開跑 review --result 與 batch close。""")
 
@@ -300,7 +300,8 @@ def cmd_manifest(args) -> int:
 
 def cmd_phase(args) -> int:
     """轉移成功後直接印出新階段的做法全文：session 中途換階段時 SessionStart 不會再附，只給檔名的話
-    Codex 常常不讀（第二輪試跑 16 次裡 4-layers.md、5-migrate.md 幾乎沒讀），改去讀 AIR 的原始碼找做法，反而更貴。"""
+    Codex 常常不讀（第二輪試跑 16 次裡 4-layers.md、5-migrate.md 幾乎沒讀），改去讀 AIR 的原始碼找做法，反而更貴。
+    第三輪（2026-10-25）：一個 session 做完時，Codex 讀階段檔從平均 4.1 次降到 1.0 次。"""
     cfg = load()
     try:
         lines = project.transition(cfg, args.phase, rollback=args.rollback, force=args.force, reason=args.reason)
