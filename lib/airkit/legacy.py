@@ -14,7 +14,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from .pyast import is_reexport_shell
+from .checks import classify, layer_files, module_of
+from .config import Allowance, Config
+from .pyast import import_targets, is_reexport_shell, matches
 
 LOGIC, SHIM, MARKER = "logic", "shim", "marker"
 KINDS = (LOGIC, SHIM, MARKER)
@@ -47,3 +49,60 @@ def counts(paths: list[Path]) -> dict[str, int]:
 def describe(c: dict[str, int]) -> str:
     """一行說明，例如「17 個有自己的程式、5 個轉接檔、1 個套件標記」。"""
     return "、".join(f"{c[k]} 個{LABELS[k]}" for k in KINDS)
+
+
+# ── allow-legacy 過期 ──
+
+NO_IMPORT, NO_MODULE = "沒有任何 import 用到", "模組已不存在"
+
+
+def _module_exists(module: str, cfg: Config) -> bool:
+    rest = module.split(".")[1:] if module.split(".")[0] == cfg.package else None
+    if rest is None:
+        return True  # 不是這個套件的模組：我們判斷不了，不當成過期
+    base = cfg.package_dir.joinpath(*rest)
+    return base.with_suffix(".py").is_file() or (base / "__init__.py").is_file()
+
+
+def stale_allowances(cfg: Config) -> list[tuple[Allowance, str]]:
+    """allow-legacy 裡已經不需要的條目：那一層已經沒有任何 import 符合它（搬完了、改成直接 import 新的層了）。
+    回傳 (條目, 原因)。別人怎麼做：import-linter 預設把對不上任何 import 的例外當錯誤（unmatched_ignore_imports_alerting），
+    tach 的 --exact 對宣告了卻沒用到的依賴也報錯。AIR 預設只提醒，因為移除條目要改 .air/project.toml，要使用者同意。"""
+    out = []
+    for a in cfg.allow_legacy:
+        layer = cfg.layers.get(a.layer)
+        used = False
+        for f in (layer_files(layer) if layer else []):
+            facts = module_of(f, cfg)
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError, ValueError):
+                continue
+            package = facts[0] if facts and facts[1] else (facts[0].rpartition(".")[0] if facts else "")
+            if any(classify(t, cfg)[0] == "legacy" and matches(classify(t, cfg)[1], [a.module]) for _, t in import_targets(tree, package)):
+                used = True
+                break
+        if not used:
+            out.append((a, NO_IMPORT if _module_exists(a.module, cfg) else NO_MODULE))
+    return out
+
+
+def describe_stale(stale: list[tuple[Allowance, str]]) -> list[str]:
+    return [f"{a.layer} → {a.module}（{why}）" for a, why in stale]
+
+
+# ── 防倒退 ──
+
+def new_logic_files(cfg: Config, legacy_paths: list[Path], added: set[str]) -> list[Path]:
+    """起點之後新增、現在還在層外、而且有自己程式的檔案。added 是相對根目錄的 posix 路徑（git 看到的新增，改名不算）。
+    轉接檔與套件標記不算：搬移時留下的轉接檔不是倒退。Google 的大規模變更說「幾乎都需要一個防止再引入舊東西的機制」。"""
+    root = cfg.root.resolve()
+    out = []
+    for p in legacy_paths:
+        try:
+            rel = p.resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if rel in added and kind(p) == LOGIC:
+            out.append(p)
+    return out

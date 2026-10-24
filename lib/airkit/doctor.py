@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import budget, buildcheck, hooklog, hosts, install, integrity
+from . import budget, buildcheck, hooklog, hosts, install, integrity, legacy
 from .config import Config, ConfigError, load
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -253,6 +253,13 @@ def _packaging(cfg: Config | None) -> list[Item]:
     return items + [Item(WARN, "打包", n) for n in buildcheck.notes(cfg)]
 
 
+def _allow_stale(cfg: Config | None) -> list[Item]:
+    """allow-legacy 裡已經不需要的條目（那一層已經沒有 import 符合它）：經使用者同意後移除。legacy-alerting = none 不提醒。"""
+    if cfg is None or cfg.legacy_alerting == "none" or not cfg.allow_legacy:
+        return []
+    return [Item(WARN, "allow-legacy", f"{line}：已經不需要，經使用者同意後從 .air/project.toml 移除") for line in legacy.describe_stale(legacy.stale_allowances(cfg))]
+
+
 def _tests_dir(root: Path, cfg: Config | None) -> list[Item]:
     """tests-dir 指到不存在的目錄而別處有測試：測試不會進凍結與驗收指紋，套件裡的測試還會被當成舊模組。
     exclude 蓋住 tests-dir：被排除的路徑不凍結、不進驗收指紋，改了測試驗收紀錄也不會過期。"""
@@ -297,6 +304,7 @@ def diagnose(root: Path) -> list[Item]:
     items += _hook_errors(root)
     items += _packaging(cfg)
     items += _tests_dir(root, cfg)
+    items += _allow_stale(cfg)
     items += _context(root, cfg)
     return items
 

@@ -19,7 +19,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from . import buildcheck, golden, junit, legacy, runner, usage
+from . import buildcheck, golden, history, junit, legacy, runner, usage
 from .checks import Report, check, rel
 from .config import KIT_DIR, PROJECT_FILE, Config, Suite
 
@@ -232,6 +232,47 @@ def allowances(cfg: Config) -> dict:
     return {"name": "allow-legacy", "required": True, "status": "fail" if items else "pass", "items": items, "detail": detail}
 
 
+NO_BASELINE = "無法比對（沒有起點 commit）"
+
+
+def added_since(root: Path, since_head: str | None) -> set[str] | None:
+    """起點 commit 之後新增的檔案（相對根目錄的 posix 路徑）：git 看到的新增加上還沒追蹤的檔案；改名不算新增。
+    沒有起點、起點不在這個 repo（淺 clone）、不是 git repo 都是 None。"""
+    if not since_head or git(root, "rev-parse", "--verify", "-q", f"{since_head}^{{commit}}") is None:
+        return None
+    diff = git(root, "-c", "core.quotepath=off", "diff", "-M", "--name-status", since_head, "--")
+    untracked = git(root, "-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard")
+    if diff is None or untracked is None:
+        return None
+    added = {line.split("\t", 1)[1] for line in diff.splitlines() if line.startswith("A\t")}
+    return added | {line for line in untracked.splitlines() if line}
+
+
+def legacy_alerts(cfg: Config, report: Report) -> list[dict]:
+    """批次驗收的兩個提醒：allow-legacy 已經不需要的條目、起點之後層外新增的有邏輯的檔案。verify.legacy-alerting：
+    warn（預設）只提醒、error 讓批次驗收不通過、none 不顯示。預設不擋：移除 allow-legacy 條目要改 .air/project.toml（要使用者同意），
+    先拆再搬的做法也會讓層外短暫多出檔案，誤判率還沒有資料。"""
+    if cfg.legacy_alerting == "none":
+        return []
+    required = cfg.legacy_alerting == "error"
+    out = []
+    if cfg.allow_legacy:
+        items = legacy.describe_stale(legacy.stale_allowances(cfg))
+        detail = (f"{len(items)} 筆 allow-legacy 已經不需要，經使用者同意後從 .air/project.toml 移除：" + "；".join(items)) if items else "每一筆 allow-legacy 都還有 import 用到"
+        out.append({"name": "allow-legacy-stale", "required": required, "status": "fail" if items else "pass", "items": items, "detail": detail})
+    if cfg.phase == "migrating":
+        _, since_head = history.window_start(cfg.root)
+        added = added_since(cfg.root, since_head)
+        if added is None:
+            out.append({"name": "legacy-growth", "required": False, "status": "pass", "items": [], "detail": NO_BASELINE})
+        else:
+            items = [rel(p, cfg.root) for p in legacy.new_logic_files(cfg, report.legacy, added)]
+            detail = (f"起點之後層外新增了 {len(items)} 個有自己程式的檔案（新程式一律寫進對應的層；先拆再搬的話搬完就會消失，"
+                      "刻意放在層外的要經使用者同意加進 migration.exclude）：" + "、".join(items)) if items else "起點之後層外沒有新增有自己程式的檔案"
+            out.append({"name": "legacy-growth", "required": required, "status": "fail" if items else "pass", "items": items, "detail": detail})
+    return out
+
+
 def legacy_remaining(report: Report, root: Path) -> dict:
     """收尾（final）時層外不能留有邏輯的模組或轉接檔，除非在 migration.exclude；只剩套件標記（空的 __init__.py）才算乾淨。
 
@@ -262,6 +303,8 @@ def verify(cfg: Config, scope: str = "batch") -> dict:
         checks.append(pack)
     if scope == "final":
         checks += [allowances(cfg), legacy_remaining(report, cfg.root)]
+    else:
+        checks += legacy_alerts(cfg, report)
     reasons = [f"{c['name']}：{c['detail']}" for c in checks if c["required"] and c["status"] != "pass"]
     after = fingerprint(cfg)
     if not same_fingerprint(before, after):
