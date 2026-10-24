@@ -152,7 +152,7 @@ def rules_to_inject(cfg: Config, session_id: str, paths) -> str:
 
 
 def stage_text(stage: int) -> str:
-    """AIR/start/ 裡那一個階段的全文。只附當下的階段：六份合計約 5,800 字，其他五份跟當下無關。"""
+    """AIR/start/ 裡那一個階段的全文。只附當下的階段：六份合計約 5,900 字，其他五份跟當下無關。"""
     return stages.text(stage)
 
 

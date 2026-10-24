@@ -14,6 +14,7 @@
   [verify]     fingerprint-extra：驗收指紋除了套件、tests、設定之外還要看的路徑；
                legacy-alerting：warn（預設，只提醒）｜error（批次驗收不通過）｜none——allow-legacy 過期、層外新增有邏輯的檔案
   [hooks]      stop-scope：session（預設；結束前只查這個 session 動過的檔案）或 all（整個專案）
+  [output]     max-chars：指令輸出的上限（預設 4,000 字；超過就寫進 .air/out/<指令>.txt，畫面只印開頭；0＝不截）
 exclude 與 fingerprint-extra 都是「相對專案根目錄的目錄或檔案」，可以寫成 dir/**（意思一樣），不支援其他萬用字元。
 """
 
@@ -70,6 +71,7 @@ class Golden:
 
 
 VERIFY_SCOPES = ("batch", "final")
+DEFAULT_OUTPUT_MAX_CHARS = 4000
 DEFAULT_BASELINE = ".air/test-baseline.json"
 
 
@@ -102,6 +104,7 @@ class Config:
     test_baseline: str = DEFAULT_BASELINE   # tests.baseline
     final: Suite | None = None              # tests.final
     golden: tuple[Golden, ...] = ()         # tests.golden
+    output_max_chars: int = DEFAULT_OUTPUT_MAX_CHARS  # output.max-chars：指令輸出的上限，0＝不截
 
     def suite(self, scope: str) -> Suite:
         """這個 scope 要跑的測試套件：final 有另外設就用它，否則都是 [tests]。"""
@@ -197,6 +200,9 @@ def build(kit: dict, project: dict, root: Path) -> Config:
     alerting = project.get("verify", {}).get("legacy-alerting", "warn")
     if alerting not in ALERTING:
         raise ConfigError(f".air/project.toml 的 verify.legacy-alerting 只能是 {'、'.join(ALERTING)}，不是：{alerting!r}")
+    max_chars = project.get("output", {}).get("max-chars", DEFAULT_OUTPUT_MAX_CHARS)
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 0:
+        raise ConfigError(f".air/project.toml 的 output.max-chars 要是 0 以上的整數（0＝不截），不是：{max_chars!r}")
     package_dir = root / proj.get("package-dir", package)
     tests_dir = root / proj.get("tests-dir", "tests")
     if package_dir.resolve().is_relative_to(tests_dir.resolve()):
@@ -248,6 +254,7 @@ def build(kit: dict, project: dict, root: Path) -> Config:
         test_baseline=_relpath(tests["baseline"], "tests.baseline") if "baseline" in tests else DEFAULT_BASELINE,
         final=_final(tests),
         golden=_golden(tests),
+        output_max_chars=max_chars,
     )
 
 

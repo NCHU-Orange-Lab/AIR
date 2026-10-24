@@ -62,6 +62,10 @@ timeout = 600                   # 上限（秒）
 # warn（預設）只提醒、error 讓批次驗收不通過、none 不顯示
 # legacy-alerting = "warn"
 
+# [output]
+# 指令輸出的上限（字）：超過就把完整內容寫進 .air/out/<指令>.txt（不進版本控制），畫面只印開頭與檔案位置；0＝不截。--json 不截
+# max-chars = 4000
+
 # [hooks]
 # 結束前的檢查範圍：session（預設）只查這個 session 動過的檔案（編輯工具記下的，加上 session 開始後內容變了的層內 .py），
 # 別的 session 的半成品不會要這個 session 去修；all 是整個專案。套件與接點的完整性（AIR009）兩種都查。
